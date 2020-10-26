@@ -16,8 +16,8 @@
 
 namespace xe {
 
-Arena::Arena(size_t chunk_size)
-    : chunk_size_(chunk_size), head_chunk_(nullptr), active_chunk_(nullptr) {}
+Arena::Arena(size_t chunk_size) : chunk_size_(chunk_size), head_chunk_(nullptr), active_chunk_(nullptr) {
+}
 
 Arena::~Arena() {
   Reset();
@@ -73,9 +73,11 @@ size_t Arena::CalculateSize() {
   Chunk* chunk = head_chunk_;
   while (chunk) {
     total_length += chunk->offset;
+    /*  
     if (chunk == active_chunk_) {
       break;
     }
+    */
     chunk = chunk->next;
   }
   return total_length;
@@ -89,9 +91,11 @@ void* Arena::CloneContents() {
   while (chunk) {
     std::memcpy(p, chunk->buffer, chunk->offset);
     p += chunk->offset;
+    /*  
     if (chunk == active_chunk_) {
       break;
     }
+    */
     chunk = chunk->next;
   }
   return result;
@@ -103,15 +107,16 @@ void Arena::CloneContents(void* buffer, size_t buffer_length) {
   while (chunk) {
     std::memcpy(p, chunk->buffer, chunk->offset);
     p += chunk->offset;
+    /*  
     if (chunk == active_chunk_) {
       break;
     }
+    */
     chunk = chunk->next;
   }
 }
 
-Arena::Chunk::Chunk(size_t chunk_size)
-    : next(nullptr), capacity(chunk_size), buffer(0), offset(0) {
+Arena::Chunk::Chunk(size_t chunk_size) : next(nullptr), capacity(chunk_size), buffer(0), offset(0) {
   buffer = reinterpret_cast<uint8_t*>(malloc(capacity));
 }
 
