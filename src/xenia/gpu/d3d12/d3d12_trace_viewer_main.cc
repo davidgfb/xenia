@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2019 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -25,16 +25,16 @@ class D3D12TraceViewer : public TraceViewer {
     return std::unique_ptr<gpu::GraphicsSystem>(new D3D12GraphicsSystem());
   }
 
-  uintptr_t GetColorRenderTarget(uint32_t pitch, MsaaSamples samples,
-                                 uint32_t base,
-                                 ColorRenderTargetFormat format) override {
+  uintptr_t GetColorRenderTarget(
+      uint32_t pitch, xenos::MsaaSamples samples, uint32_t base,
+      xenos::ColorRenderTargetFormat format) override {
     // TODO(Triang3l): EDRAM viewer.
     return 0;
   }
 
-  uintptr_t GetDepthRenderTarget(uint32_t pitch, MsaaSamples samples,
-                                 uint32_t base,
-                                 DepthRenderTargetFormat format) override {
+  uintptr_t GetDepthRenderTarget(
+      uint32_t pitch, xenos::MsaaSamples samples, uint32_t base,
+      xenos::DepthRenderTargetFormat format) override {
     // TODO(Triang3l): EDRAM viewer.
     return 0;
   }
@@ -47,7 +47,7 @@ class D3D12TraceViewer : public TraceViewer {
   }
 };
 
-int trace_viewer_main(const std::vector<std::wstring>& args) {
+int trace_viewer_main(const std::vector<std::string>& args) {
   D3D12TraceViewer trace_viewer;
   return trace_viewer.Main(args);
 }
@@ -56,6 +56,6 @@ int trace_viewer_main(const std::vector<std::wstring>& args) {
 }  // namespace gpu
 }  // namespace xe
 
-DEFINE_ENTRY_POINT(L"xenia-gpu-d3d12-trace-viewer",
+DEFINE_ENTRY_POINT("xenia-gpu-d3d12-trace-viewer",
                    xe::gpu::d3d12::trace_viewer_main, "some.trace",
                    "target_trace_file");

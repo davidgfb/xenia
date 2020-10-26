@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -42,8 +42,8 @@
 
 DEFINE_bool(debug, DEFAULT_DEBUG_FLAG,
             "Allow debugging and retain debug information.", "General");
-DEFINE_string(trace_function_data_path, "", "File to write trace data to.",
-              "CPU");
+DEFINE_path(trace_function_data_path, "", "File to write trace data to.",
+            "CPU");
 DEFINE_bool(break_on_start, false, "Break into the debugger on startup.",
             "CPU");
 
@@ -140,7 +140,7 @@ bool Processor::Setup(std::unique_ptr<backend::Backend> backend) {
   }
 
   // Open the trace data path, if requested.
-  functions_trace_path_ = xe::to_wstring(cvars::trace_function_data_path);
+  functions_trace_path_ = cvars::trace_function_data_path;
   if (!functions_trace_path_.empty()) {
     functions_trace_file_ = ChunkedMappedMemoryWriter::Open(
         functions_trace_path_, 32 * 1024 * 1024, true);
@@ -167,7 +167,7 @@ bool Processor::AddModule(std::unique_ptr<Module> module) {
   return true;
 }
 
-Module* Processor::GetModule(const char* name) {
+Module* Processor::GetModule(const std::string_view name) {
   auto global_lock = global_critical_region_.Acquire();
   for (const auto& module : modules_) {
     if (module->name() == name) {
@@ -186,7 +186,7 @@ std::vector<Module*> Processor::GetModules() {
   return clone;
 }
 
-Function* Processor::DefineBuiltin(const std::string& name,
+Function* Processor::DefineBuiltin(const std::string_view name,
                                    BuiltinFunction::Handler handler, void* arg0,
                                    void* arg1) {
   uint32_t address = next_builtin_address_;
@@ -323,7 +323,7 @@ bool Processor::Execute(ThreadState* thread_state, uint32_t address) {
   auto function = ResolveFunction(address);
   if (!function) {
     // Symbol not found in any module.
-    XELOGCPU("Execute(%.8X): failed to find function", address);
+    XELOGCPU("Execute({:08X}): failed to find function", address);
     return false;
   }
 
@@ -354,7 +354,7 @@ bool Processor::ExecuteRaw(ThreadState* thread_state, uint32_t address) {
   auto function = ResolveFunction(address);
   if (!function) {
     // Symbol not found in any module.
-    XELOGCPU("Execute(%.8X): failed to find function", address);
+    XELOGCPU("Execute({:08X}): failed to find function", address);
     return false;
   }
 
@@ -973,8 +973,9 @@ bool Processor::StepToGuestAddress(uint32_t thread_id, uint32_t pc) {
   if (functions.empty()) {
     // Function hasn't been generated yet. Generate it.
     if (!ResolveFunction(pc)) {
-      XELOGE("Processor::StepToAddress(%.8X) - Function could not be resolved",
-             pc);
+      XELOGE(
+          "Processor::StepToAddress({:08X}) - Function could not be resolved",
+          pc);
       return false;
     }
   }

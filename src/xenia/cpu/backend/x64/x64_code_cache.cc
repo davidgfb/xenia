@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2019 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -17,6 +17,7 @@
 #pragma comment(lib, "../third_party/vtune/lib64/jitprofiling.lib")
 #endif
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/clock.h"
 #include "xenia/base/logging.h"
@@ -55,14 +56,15 @@ bool X64CodeCache::Initialize() {
   if (!indirection_table_base_) {
     XELOGE("Unable to allocate code cache indirection table");
     XELOGE(
-        "This is likely because the %.8X-%.8X range is in use by some other "
+        "This is likely because the {:X}-{:X} range is in use by some other "
         "system DLL",
-        kIndirectionTableBase, kIndirectionTableBase + kIndirectionTableSize);
+        static_cast<uint64_t>(kIndirectionTableBase),
+        kIndirectionTableBase + kIndirectionTableSize);
   }
 
   // Create mmap file. This allows us to share the code cache with the debugger.
-  file_name_ = std::wstring(L"Local\\xenia_code_cache_") +
-               std::to_wstring(Clock::QueryHostTickCount());
+  file_name_ =
+      fmt::format("Local\\xenia_code_cache_{}", Clock::QueryHostTickCount());
   mapping_ = xe::memory::CreateFileMappingHandle(
       file_name_, kGeneratedCodeSize, xe::memory::PageAccess::kExecuteReadWrite,
       false);
@@ -78,9 +80,10 @@ bool X64CodeCache::Initialize() {
   if (!generated_code_base_) {
     XELOGE("Unable to allocate code cache generated code storage");
     XELOGE(
-        "This is likely because the %.8X-%.8X range is in use by some other "
+        "This is likely because the {:X}-{:X} range is in use by some other "
         "system DLL",
-        kGeneratedCodeBase, kGeneratedCodeBase + kGeneratedCodeSize);
+        static_cast<uint64_t>(kGeneratedCodeBase),
+        kGeneratedCodeBase + kGeneratedCodeSize);
     return false;
   }
 

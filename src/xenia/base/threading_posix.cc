@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2014 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -32,13 +32,12 @@ uint32_t current_thread_system_id() {
   return static_cast<uint32_t>(syscall(SYS_gettid));
 }
 
-void set_name(const std::string& name) {
-  pthread_setname_np(pthread_self(), name.c_str());
+void set_name(std::thread::native_handle_type handle,
+              const std::string_view name) {
+  pthread_setname_np(handle, std::string(name).c_str());
 }
 
-void set_name(std::thread::native_handle_type handle, const std::string& name) {
-  pthread_setname_np(handle, name.c_str());
-}
+void set_name(const std::string_view name) { set_name(pthread_self(), name); }
 
 void MaybeYield() {
   pthread_yield();
@@ -437,7 +436,7 @@ std::unique_ptr<Thread> Thread::Create(CreationParameters params,
   if (ret != 0) {
     // TODO(benvanik): pass back?
     auto last_error = errno;
-    XELOGE("Unable to pthread_create: %d", last_error);
+    XELOGE("Unable to pthread_create: {}", last_error);
     delete start_data;
     return nullptr;
   }

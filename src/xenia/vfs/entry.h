@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -96,7 +96,8 @@ class Entry {
 
   bool is_read_only() const;
 
-  Entry* GetChild(std::string name);
+  Entry* GetChild(const std::string_view name);
+  Entry* ResolvePath(const std::string_view path);
 
   const std::vector<std::unique_ptr<Entry>>& children() const {
     return children_;
@@ -105,7 +106,7 @@ class Entry {
   Entry* IterateChildren(const xe::filesystem::WildcardEngine& engine,
                          size_t* current_index);
 
-  Entry* CreateEntry(std::string name, uint32_t attributes);
+  Entry* CreateEntry(const std::string_view name, uint32_t attributes);
   bool Delete(Entry* entry);
   bool Delete();
   void Touch();
@@ -123,10 +124,10 @@ class Entry {
   virtual void update() { return; }
 
  protected:
-  Entry(Device* device, Entry* parent, const std::string& path);
+  Entry(Device* device, Entry* parent, const std::string_view path);
 
-  virtual std::unique_ptr<Entry> CreateEntryInternal(std::string name,
-                                                     uint32_t attributes) {
+  virtual std::unique_ptr<Entry> CreateEntryInternal(
+      const std::string_view name, uint32_t attributes) {
     return nullptr;
   }
   virtual bool DeleteEntryInternal(Entry* entry) { return false; }

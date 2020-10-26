@@ -9,6 +9,7 @@
 
 #include <cstring>
 
+#include "xenia/base/assert.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
 #include "xenia/kernel/kernel_state.h"
@@ -160,7 +161,7 @@ dword_result_t NtAllocateVirtualMemory(lpdword_t base_addr_ptr,
     }
   }
 
-  XELOGD("NtAllocateVirtualMemory = %.8X", address);
+  XELOGD("NtAllocateVirtualMemory = {:08X}", address);
 
   // Stash back.
   // Maybe set X_STATUS_ALREADY_COMMITTED if MEM_COMMIT?
@@ -283,12 +284,18 @@ dword_result_t NtQueryVirtualMemory(
   memory_basic_information_ptr->allocation_protect =
       ToXdkProtectFlags(alloc_info.allocation_protect);
   memory_basic_information_ptr->region_size = alloc_info.region_size;
-  uint32_t x_state = 0;
-  if (alloc_info.state & kMemoryAllocationReserve) {
-    x_state |= X_MEM_RESERVE;
-  }
+  // https://docs.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-memory_basic_information
+  // State: ... This member can be one of the following values: MEM_COMMIT,
+  // MEM_FREE, MEM_RESERVE.
+  // State queried by Beautiful Katamari before displaying the loading screen.
+  uint32_t x_state;
   if (alloc_info.state & kMemoryAllocationCommit) {
-    x_state |= X_MEM_COMMIT;
+    assert_not_zero(alloc_info.state & kMemoryAllocationReserve);
+    x_state = X_MEM_COMMIT;
+  } else if (alloc_info.state & kMemoryAllocationReserve) {
+    x_state = X_MEM_RESERVE;
+  } else {
+    x_state = X_MEM_FREE;
   }
   memory_basic_information_ptr->state = x_state;
   memory_basic_information_ptr->protect = ToXdkProtectFlags(alloc_info.protect);
@@ -356,7 +363,7 @@ dword_result_t MmAllocatePhysicalMemoryEx(dword_t flags, dword_t region_size,
     // Failed - assume no memory available.
     return 0;
   }
-  XELOGD("MmAllocatePhysicalMemoryEx = %.8X", base_address);
+  XELOGD("MmAllocatePhysicalMemoryEx = {:08X}", base_address);
 
   return base_address;
 }

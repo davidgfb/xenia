@@ -91,15 +91,17 @@ filter({"configurations:Release", "platforms:Windows"})
 filter("platforms:Linux")
   system("linux")
   toolset("clang")
+  cppdialect("C++17")
   buildoptions({
     -- "-mlzcnt",  -- (don't) Assume lzcnt is supported.
     "`pkg-config --cflags gtk+-x11-3.0`",
     "-fno-lto", -- Premake doesn't support LTO on clang
   })
   links({
-    "pthread",
+    "stdc++fs",
     "dl",
     "lz4",
+    "pthread",
     "rt",
   })
   linkoptions({
@@ -110,9 +112,7 @@ filter({"platforms:Linux", "kind:*App"})
   linkgroups("On")
 
 filter({"platforms:Linux", "language:C++", "toolset:gcc"})
-  buildoptions({
-    "-std=c++14",
-  })
+  cppdialect("C++17")
   links({
   })
   disablewarnings({
@@ -141,22 +141,26 @@ filter({"platforms:Linux", "language:C++", "toolset:clang"})
   })
 filter({"platforms:Linux", "language:C++", "toolset:clang", "files:*.cc or *.cpp"})
   buildoptions({
-    "-std=c++14",
     "-stdlib=libstdc++",
   })
 
 filter("platforms:Windows")
   system("windows")
   toolset("msc")
+  cppdialect("C++17")
   buildoptions({
     "/MP",      -- Multiprocessor compilation.
+    "/utf-8",   -- 'build correctly on systems with non-Latin codepages'.
+    -- Mark warnings as severe
+    "/w14839", -- non-standard use of class 'type' as an argument to a variadic function
+    "/w14840", -- non-portable use of class 'type' as an argument to a variadic function
+    -- Disable warnings
     "/wd4100",  -- Unreferenced parameters are ok.
     "/wd4201",  -- Nameless struct/unions are ok.
     "/wd4512",  -- 'assignment operator was implicitly defined as deleted'.
     "/wd4127",  -- 'conditional expression is constant'.
     "/wd4324",  -- 'structure was padded due to alignment specifier'.
     "/wd4189",  -- 'local variable is initialized but not referenced'.
-    "/utf-8",   -- 'build correctly on systems with non-Latin codepages'.
   })
   flags({
     "NoMinimalRebuild", -- Required for /MP above.
@@ -198,10 +202,10 @@ solution("xenia")
     platforms({"Linux"})
   elseif os.istarget("windows") then
     platforms({"Windows"})
-    -- Minimum version to support ID3D12GraphicsCommandList1 (for
-    -- SetSamplePositions).
+    -- 10.0.15063.0: ID3D12GraphicsCommandList1::SetSamplePositions.
+    -- 10.0.19041.0: D3D12_HEAP_FLAG_CREATE_NOT_ZEROED.
     filter("action:vs2017")
-      systemversion("10.0.15063.0")
+      systemversion("10.0.19041.0")
     filter("action:vs2019")
       systemversion("10.0")
     filter({})
@@ -214,10 +218,12 @@ solution("xenia")
   include("third_party/discord-rpc.lua")
   include("third_party/cxxopts.lua")
   include("third_party/cpptoml.lua")
+  include("third_party/fmt.lua")
   include("third_party/glslang-spirv.lua")
   include("third_party/imgui.lua")
   include("third_party/libav.lua")
   include("third_party/mspack.lua")
+  include("third_party/SDL2.lua")
   include("third_party/snappy.lua")
   include("third_party/spirv-tools.lua")
   include("third_party/volk.lua")
@@ -235,15 +241,14 @@ solution("xenia")
   include("src/xenia/debug/ui")
   include("src/xenia/gpu")
   include("src/xenia/gpu/null")
-  include("src/xenia/gpu/vk")
   include("src/xenia/gpu/vulkan")
+  include("src/xenia/helper/sdl")
   include("src/xenia/hid")
   include("src/xenia/hid/nop")
   include("src/xenia/hid/sdl")
   include("src/xenia/kernel")
   include("src/xenia/ui")
   include("src/xenia/ui/spirv")
-  include("src/xenia/ui/vk")
   include("src/xenia/ui/vulkan")
   include("src/xenia/vfs")
 

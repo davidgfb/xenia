@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2015 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -58,7 +58,7 @@ bool ElfModule::is_executable() const {
   return hdr->e_entry != 0;
 }
 
-bool ElfModule::Load(const std::string& name, const std::string& path,
+bool ElfModule::Load(const std::string_view name, const std::string_view path,
                      const void* elf_addr, size_t elf_length) {
   name_ = name;
   path_ = path;
@@ -83,7 +83,7 @@ bool ElfModule::Load(const std::string& name, const std::string& path,
     // Not a PPC ELF!
     XELOGE(
         "ELF: Could not load ELF because target machine is not PPC! (target: "
-        "%d)",
+        "{})",
         uint32_t(hdr->e_machine));
     return false;
   }
@@ -114,7 +114,7 @@ bool ElfModule::Load(const std::string& name, const std::string& path,
       // Allocate and copy into memory.
       // Base address @ 0x80000000
       if (phdr[i].p_vaddr < 0x80000000 || phdr[i].p_vaddr > 0x9FFFFFFF) {
-        XELOGE("ELF: Could not allocate memory for section @ address 0x%.8X",
+        XELOGE("ELF: Could not allocate memory for section @ address 0x{:08X}",
                uint32_t(phdr[i].p_vaddr));
         return false;
       }

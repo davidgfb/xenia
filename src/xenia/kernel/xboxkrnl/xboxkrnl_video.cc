@@ -294,7 +294,7 @@ struct BufferScaling {
 };
 void AppendParam(StringBuffer* string_buffer, pointer_t<BufferScaling> param) {
   string_buffer->AppendFormat(
-      "%.8X(scale %dx%d -> %dx%d))", param.guest_address(),
+      "{:08X}(scale {}x{} -> {}x{}))", param.guest_address(),
       uint16_t(param->bb_width), uint16_t(param->bb_height),
       uint16_t(param->fb_width), uint16_t(param->fb_height));
 }
@@ -370,17 +370,17 @@ void VdSwap(lpvoid_t buffer_ptr,  // ptr into primary ringbuffer
   assert_true(frontbuffer_address != UINT32_MAX);
   if (frontbuffer_address == UINT32_MAX) {
     // Xenia-specific safety check.
-    XELOGE("VdSwap: Invalid front buffer virtual address 0x%.8X",
+    XELOGE("VdSwap: Invalid front buffer virtual address 0x{:08X}",
            fetch.base_address << 12);
     return;
   }
   fetch.base_address = frontbuffer_address >> 12;
 
-  auto texture_format = gpu::TextureFormat(texture_format_ptr.value());
+  auto texture_format = gpu::xenos::TextureFormat(texture_format_ptr.value());
   auto color_space = *color_space_ptr;
-  assert_true(texture_format == gpu::TextureFormat::k_8_8_8_8 ||
+  assert_true(texture_format == gpu::xenos::TextureFormat::k_8_8_8_8 ||
               texture_format ==
-                  gpu::TextureFormat::k_2_10_10_10_AS_16_16_16_16);
+                  gpu::xenos::TextureFormat::k_2_10_10_10_AS_16_16_16_16);
   assert_true(color_space == 0);  // RGB(0)
   assert_true(*width == 1 + fetch.size_2d.width);
   assert_true(*height == 1 + fetch.size_2d.height);

@@ -13,9 +13,7 @@
 
 #include "xenia/apu/apu_flags.h"
 #include "xenia/base/logging.h"
-#if XE_PLATFORM_WIN32
-#include "xenia/base/platform_win.h"
-#endif  // XE_PLATFORM_WIN32
+#include "xenia/helper/sdl/sdl_helper.h"
 
 namespace xe {
 namespace apu {
@@ -31,25 +29,18 @@ SDLAudioDriver::~SDLAudioDriver() {
 };
 
 bool SDLAudioDriver::Initialize() {
-  // With msvc delayed loading, exceptions are used to determine dll presence.
-#if XE_PLATFORM_WIN32
-  __try {
-#endif  // XE_PLATFORM_WIN32
-    SDL_version ver = {};
-    SDL_GetVersion(&ver);
-    if ((ver.major < 2) ||
-        (ver.major == 2 && ver.minor == 0 && ver.patch < 8)) {
-      XELOGW(
-          "SDL library version %d.%d.%d is outdated. "
-          "You may experience choppy audio.",
-          ver.major, ver.minor, ver.patch);
-    }
-#if XE_PLATFORM_WIN32
-  } __except (EXCEPTION_EXECUTE_HANDLER) {
+  SDL_version ver = {};
+  SDL_GetVersion(&ver);
+  if ((ver.major < 2) || (ver.major == 2 && ver.minor == 0 && ver.patch < 8)) {
+    XELOGW(
+        "SDL library version {}.{}.{} is outdated. "
+        "You may experience choppy audio.",
+        ver.major, ver.minor, ver.patch);
+  }
+
+  if (!xe::helper::sdl::SDLHelper::Prepare()) {
     return false;
   }
-#endif  // XE_PLATFORM_WIN32
-
   if (SDL_InitSubSystem(SDL_INIT_AUDIO) < 0) {
     return false;
   }

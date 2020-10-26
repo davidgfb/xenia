@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -56,6 +56,7 @@ typedef uint32_t X_STATUS;
 #define X_STATUS_ACCESS_DENIED                          ((X_STATUS)0xC0000022L)
 #define X_STATUS_BUFFER_TOO_SMALL                       ((X_STATUS)0xC0000023L)
 #define X_STATUS_OBJECT_TYPE_MISMATCH                   ((X_STATUS)0xC0000024L)
+#define X_STATUS_OBJECT_NAME_INVALID                    ((X_STATUS)0xC0000033L)
 #define X_STATUS_OBJECT_NAME_NOT_FOUND                  ((X_STATUS)0xC0000034L)
 #define X_STATUS_OBJECT_NAME_COLLISION                  ((X_STATUS)0xC0000035L)
 #define X_STATUS_INVALID_PAGE_PROTECTION                ((X_STATUS)0xC0000045L)
@@ -117,31 +118,35 @@ typedef uint32_t X_HRESULT;
 #define X_E_NO_SUCH_USER                        X_HRESULT_FROM_WIN32(X_ERROR_NO_SUCH_USER)
 
 // MEM_*, used by NtAllocateVirtualMemory
-#define X_MEM_COMMIT              0x00001000
-#define X_MEM_RESERVE             0x00002000
-#define X_MEM_DECOMMIT            0x00004000
-#define X_MEM_RELEASE             0x00008000
-#define X_MEM_FREE                0x00010000
-#define X_MEM_PRIVATE             0x00020000
-#define X_MEM_RESET               0x00080000
-#define X_MEM_TOP_DOWN            0x00100000
-#define X_MEM_NOZERO              0x00800000
-#define X_MEM_LARGE_PAGES         0x20000000
-#define X_MEM_HEAP                0x40000000
-#define X_MEM_16MB_PAGES          0x80000000  // from Valve SDK
+enum X_MEM : uint32_t {
+  X_MEM_COMMIT      = 0x00001000,
+  X_MEM_RESERVE     = 0x00002000,
+  X_MEM_DECOMMIT    = 0x00004000,
+  X_MEM_RELEASE     = 0x00008000,
+  X_MEM_FREE        = 0x00010000,
+  X_MEM_PRIVATE     = 0x00020000,
+  X_MEM_RESET       = 0x00080000,
+  X_MEM_TOP_DOWN    = 0x00100000,
+  X_MEM_NOZERO      = 0x00800000,
+  X_MEM_LARGE_PAGES = 0x20000000,
+  X_MEM_HEAP        = 0x40000000,
+  X_MEM_16MB_PAGES  = 0x80000000  // from Valve SDK
+};
 
 // PAGE_*, used by NtAllocateVirtualMemory
-#define X_PAGE_NOACCESS           0x00000001
-#define X_PAGE_READONLY           0x00000002
-#define X_PAGE_READWRITE          0x00000004
-#define X_PAGE_WRITECOPY          0x00000008
-#define X_PAGE_EXECUTE            0x00000010
-#define X_PAGE_EXECUTE_READ       0x00000020
-#define X_PAGE_EXECUTE_READWRITE  0x00000040
-#define X_PAGE_EXECUTE_WRITECOPY  0x00000080
-#define X_PAGE_GUARD              0x00000100
-#define X_PAGE_NOCACHE            0x00000200
-#define X_PAGE_WRITECOMBINE       0x00000400
+enum X_PAGE : uint32_t {
+  X_PAGE_NOACCESS          = 0x00000001,
+  X_PAGE_READONLY          = 0x00000002,
+  X_PAGE_READWRITE         = 0x00000004,
+  X_PAGE_WRITECOPY         = 0x00000008,
+  X_PAGE_EXECUTE           = 0x00000010,
+  X_PAGE_EXECUTE_READ      = 0x00000020,
+  X_PAGE_EXECUTE_READWRITE = 0x00000040,
+  X_PAGE_EXECUTE_WRITECOPY = 0x00000080,
+  X_PAGE_GUARD             = 0x00000100,
+  X_PAGE_NOCACHE           = 0x00000200,
+  X_PAGE_WRITECOMBINE      = 0x00000400
+};
 
 // Sockets/networking.
 #define X_INVALID_SOCKET (uint32_t)(~0)
@@ -161,47 +166,6 @@ enum X_FILE_ATTRIBUTES : uint32_t {
   X_FILE_ATTRIBUTE_TEMPORARY = 0x0100,
   X_FILE_ATTRIBUTE_COMPRESSED = 0x0800,
   X_FILE_ATTRIBUTE_ENCRYPTED = 0x4000,
-};
-
-// https://github.com/oukiar/vdash/blob/master/vdash/include/kernel.h
-enum X_FILE_INFORMATION_CLASS {
-  XFileDirectoryInformation = 1,
-  XFileFullDirectoryInformation,
-  XFileBothDirectoryInformation,
-  XFileBasicInformation,
-  XFileStandardInformation,
-  XFileInternalInformation,
-  XFileEaInformation,
-  XFileAccessInformation,
-  XFileNameInformation,
-  XFileRenameInformation,
-  XFileLinkInformation,
-  XFileNamesInformation,
-  XFileDispositionInformation,
-  XFilePositionInformation,
-  XFileFullEaInformation,
-  XFileModeInformation,
-  XFileAlignmentInformation,
-  XFileAllInformation,
-  XFileAllocationInformation,
-  XFileEndOfFileInformation,
-  XFileAlternateNameInformation,
-  XFileStreamInformation,
-  XFileMountPartitionInformation,
-  XFileMountPartitionsInformation,
-  XFilePipeRemoteInformation,
-  XFileSectorInformation,
-  XFileXctdCompressionInformation,
-  XFileCompressionInformation,
-  XFileObjectIdInformation,
-  XFileCompletionInformation,
-  XFileMoveClusterInformation,
-  XFileIoPriorityInformation,
-  XFileReparsePointInformation,
-  XFileNetworkOpenInformation,
-  XFileAttributeTagInformation,
-  XFileTrackingInformation,
-  XFileMaximumInformation
 };
 
 // Known as XOVERLAPPED to 360 code.

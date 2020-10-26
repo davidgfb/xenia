@@ -2,13 +2,14 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2016 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
 #include "xenia/ui/vulkan/vulkan_util.h"
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/logging.h"
 
@@ -29,8 +30,8 @@ Version Version::Parse(uint32_t value) {
   version.major = VK_VERSION_MAJOR(value);
   version.minor = VK_VERSION_MINOR(value);
   version.patch = VK_VERSION_PATCH(value);
-  version.pretty_string = xe::format_string("%u.%u.%u", version.major,
-                                            version.minor, version.patch);
+  version.pretty_string =
+      fmt::format("{}.{}.{}", version.major, version.minor, version.patch);
   return version;
 }
 
@@ -409,7 +410,7 @@ void FatalVulkanError(std::string error) {
 
 void CheckResult(VkResult result, const char* action) {
   if (result) {
-    XELOGE("Vulkan check: %s returned %s", action, to_string(result));
+    XELOGE("Vulkan check: {} returned {}", action, to_string(result));
   }
   assert_true(result == VK_SUCCESS, action);
 }
@@ -429,26 +430,26 @@ std::pair<bool, std::vector<const char*>> CheckRequirements(
         found = true;
         if (requirement.min_version > layer_infos[j].properties.specVersion) {
           if (requirement.is_optional) {
-            XELOGVK("- optional layer %s (%s) version mismatch", layer_name,
-                    layer_version.pretty_string.c_str());
+            XELOGVK("- optional layer {} ({}) version mismatch", layer_name,
+                    layer_version.pretty_string);
             continue;
           }
-          XELOGE("ERROR: required layer %s (%s) version mismatch", layer_name,
-                 layer_version.pretty_string.c_str());
+          XELOGE("ERROR: required layer {} ({}) version mismatch", layer_name,
+                 layer_version.pretty_string);
           any_missing = true;
           break;
         }
-        XELOGVK("- enabling layer %s (%s)", layer_name,
-                layer_version.pretty_string.c_str());
+        XELOGVK("- enabling layer {} ({})", layer_name,
+                layer_version.pretty_string);
         enabled_layers.push_back(layer_name);
         break;
       }
     }
     if (!found) {
       if (requirement.is_optional) {
-        XELOGVK("- optional layer %s not found", requirement.name.c_str());
+        XELOGVK("- optional layer {} not found", requirement.name);
       } else {
-        XELOGE("ERROR: required layer %s not found", requirement.name.c_str());
+        XELOGE("ERROR: required layer {} not found", requirement.name);
         any_missing = true;
       }
     }
@@ -471,27 +472,26 @@ std::pair<bool, std::vector<const char*>> CheckRequirements(
         found = true;
         if (requirement.min_version > extension_properties[j].specVersion) {
           if (requirement.is_optional) {
-            XELOGVK("- optional extension %s (%s) version mismatch",
-                    extension_name, extension_version.pretty_string.c_str());
+            XELOGVK("- optional extension {} ({}) version mismatch",
+                    extension_name, extension_version.pretty_string);
             continue;
           }
-          XELOGE("ERROR: required extension %s (%s) version mismatch",
-                 extension_name, extension_version.pretty_string.c_str());
+          XELOGE("ERROR: required extension {} ({}) version mismatch",
+                 extension_name, extension_version.pretty_string);
           any_missing = true;
           break;
         }
-        XELOGVK("- enabling extension %s (%s)", extension_name,
-                extension_version.pretty_string.c_str());
+        XELOGVK("- enabling extension {} ({})", extension_name,
+                extension_version.pretty_string);
         enabled_extensions.push_back(extension_name);
         break;
       }
     }
     if (!found) {
       if (requirement.is_optional) {
-        XELOGVK("- optional extension %s not found", requirement.name.c_str());
+        XELOGVK("- optional extension {} not found", requirement.name);
       } else {
-        XELOGE("ERROR: required extension %s not found",
-               requirement.name.c_str());
+        XELOGE("ERROR: required extension {} not found", requirement.name);
         any_missing = true;
       }
     }

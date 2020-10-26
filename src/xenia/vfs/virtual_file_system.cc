@@ -2,14 +2,13 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
 #include "xenia/vfs/virtual_file_system.h"
 
-#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
 #include "xenia/kernel/xfile.h"
@@ -32,11 +31,11 @@ bool VirtualFileSystem::RegisterDevice(std::unique_ptr<Device> device) {
   return true;
 }
 
-bool VirtualFileSystem::UnregisterDevice(const std::string& path) {
+bool VirtualFileSystem::UnregisterDevice(const std::string_view path) {
   auto global_lock = global_critical_region_.Acquire();
   for (auto it = devices_.begin(); it != devices_.end(); ++it) {
     if ((*it)->mount_path() == path) {
-      XELOGD("Unregistered device: %s", (*it)->mount_path().c_str());
+      XELOGD("Unregistered device: {}", (*it)->mount_path());
       devices_.erase(it);
       return true;
     }
@@ -44,34 +43,34 @@ bool VirtualFileSystem::UnregisterDevice(const std::string& path) {
   return false;
 }
 
-bool VirtualFileSystem::RegisterSymbolicLink(const std::string& path,
-                                             const std::string& target) {
+bool VirtualFileSystem::RegisterSymbolicLink(const std::string_view path,
+                                             const std::string_view target) {
   auto global_lock = global_critical_region_.Acquire();
-  symlinks_.insert({path, target});
-  XELOGD("Registered symbolic link: %s => %s", path.c_str(), target.c_str());
+  symlinks_.insert({std::string(path), std::string(target)});
+  XELOGD("Registered symbolic link: {} => {}", path, target);
 
   return true;
 }
 
-bool VirtualFileSystem::UnregisterSymbolicLink(const std::string& path) {
+bool VirtualFileSystem::UnregisterSymbolicLink(const std::string_view path) {
   auto global_lock = global_critical_region_.Acquire();
-  auto it = symlinks_.find(path);
+  auto it = std::find_if(
+      symlinks_.cbegin(), symlinks_.cend(),
+      [&](const auto& s) { return xe::utf8::equal_case(path, s.first); });
   if (it == symlinks_.end()) {
     return false;
   }
-  XELOGD("Unregistered symbolic link: %s => %s", it->first.c_str(),
-         it->second.c_str());
+  XELOGD("Unregistered symbolic link: {} => {}", it->first, it->second);
 
   symlinks_.erase(it);
   return true;
 }
 
-bool VirtualFileSystem::FindSymbolicLink(const std::string& path,
+bool VirtualFileSystem::FindSymbolicLink(const std::string_view path,
                                          std::string& target) {
-  auto it =
-      std::find_if(symlinks_.cbegin(), symlinks_.cend(), [&](const auto& s) {
-        return xe::find_first_of_case(path, s.first) == 0;
-      });
+  auto it = std::find_if(
+      symlinks_.cbegin(), symlinks_.cend(),
+      [&](const auto& s) { return xe::utf8::starts_with_case(path, s.first); });
   if (it == symlinks_.cend()) {
     return false;
   }
@@ -79,14 +78,14 @@ bool VirtualFileSystem::FindSymbolicLink(const std::string& path,
   return true;
 }
 
-bool VirtualFileSystem::ResolveSymbolicLink(const std::string& path,
+bool VirtualFileSystem::ResolveSymbolicLink(const std::string_view path,
                                             std::string& result) {
   result = path;
   bool was_resolved = false;
   while (true) {
     auto it =
         std::find_if(symlinks_.cbegin(), symlinks_.cend(), [&](const auto& s) {
-          return xe::find_first_of_case(result, s.first) == 0;
+          return xe::utf8::starts_with_case(result, s.first);
         });
     if (it == symlinks_.cend()) {
       break;
@@ -100,11 +99,11 @@ bool VirtualFileSystem::ResolveSymbolicLink(const std::string& path,
   return was_resolved;
 }
 
-Entry* VirtualFileSystem::ResolvePath(const std::string& path) {
+Entry* VirtualFileSystem::ResolvePath(const std::string_view path) {
   auto global_lock = global_critical_region_.Acquire();
 
   // Resolve relative paths
-  std::string normalized_path(xe::filesystem::CanonicalizePath(path));
+  auto normalized_path(xe::utf8::canonicalize_guest_path(path));
 
   // Resolve symlinks.
   std::string resolved_path;
@@ -115,10 +114,10 @@ Entry* VirtualFileSystem::ResolvePath(const std::string& path) {
   // Find the device.
   auto it =
       std::find_if(devices_.cbegin(), devices_.cend(), [&](const auto& d) {
-        return xe::find_first_of_case(normalized_path, d->mount_path()) == 0;
+        return xe::utf8::starts_with(normalized_path, d->mount_path());
       });
   if (it == devices_.cend()) {
-    XELOGE("ResolvePath(%s) failed - device not found", path.c_str());
+    XELOGE("ResolvePath({}) failed - device not found", path);
     return nullptr;
   }
 
@@ -127,26 +126,21 @@ Entry* VirtualFileSystem::ResolvePath(const std::string& path) {
   return device->ResolvePath(relative_path);
 }
 
-Entry* VirtualFileSystem::ResolveBasePath(const std::string& path) {
-  auto base_path = xe::find_base_path(path);
-  return ResolvePath(base_path);
-}
-
-Entry* VirtualFileSystem::CreatePath(const std::string& path,
+Entry* VirtualFileSystem::CreatePath(const std::string_view path,
                                      uint32_t attributes) {
   // Create all required directories recursively.
-  auto path_parts = xe::split_path(path);
+  auto path_parts = xe::utf8::split_path(path);
   if (path_parts.empty()) {
     return nullptr;
   }
-  auto partial_path = path_parts[0];
+  auto partial_path = std::string(path_parts[0]);
   auto partial_entry = ResolvePath(partial_path);
   if (!partial_entry) {
     return nullptr;
   }
   auto parent_entry = partial_entry;
   for (size_t i = 1; i < path_parts.size() - 1; ++i) {
-    partial_path = xe::join_paths(partial_path, path_parts[i]);
+    partial_path = xe::utf8::join_guest_paths(partial_path, path_parts[i]);
     auto child_entry = ResolvePath(partial_path);
     if (!child_entry) {
       child_entry =
@@ -161,7 +155,7 @@ Entry* VirtualFileSystem::CreatePath(const std::string& path,
                                    attributes);
 }
 
-bool VirtualFileSystem::DeletePath(const std::string& path) {
+bool VirtualFileSystem::DeletePath(const std::string_view path) {
   auto entry = ResolvePath(path);
   if (!entry) {
     return false;
@@ -174,7 +168,8 @@ bool VirtualFileSystem::DeletePath(const std::string& path) {
   return parent->Delete(entry);
 }
 
-X_STATUS VirtualFileSystem::OpenFile(const std::string& path,
+X_STATUS VirtualFileSystem::OpenFile(Entry* root_entry,
+                                     const std::string_view path,
                                      FileDisposition creation_disposition,
                                      uint32_t desired_access, bool is_directory,
                                      File** out_file, FileAction* out_action) {
@@ -196,17 +191,20 @@ X_STATUS VirtualFileSystem::OpenFile(const std::string& path,
   // If no device or parent, fail.
   Entry* parent_entry = nullptr;
   Entry* entry = nullptr;
-  if (!xe::find_base_path(path).empty()) {
-    parent_entry = ResolveBasePath(path);
+
+  auto base_path = xe::utf8::find_base_guest_path(path);
+  if (!base_path.empty()) {
+    parent_entry = !root_entry ? ResolvePath(base_path)
+                               : root_entry->ResolvePath(base_path);
     if (!parent_entry) {
       *out_action = FileAction::kDoesNotExist;
       return X_STATUS_NO_SUCH_FILE;
     }
 
-    auto file_name = xe::find_name_from_path(path);
+    auto file_name = xe::utf8::find_name_from_guest_path(path);
     entry = parent_entry->GetChild(file_name);
   } else {
-    entry = ResolvePath(path);
+    entry = !root_entry ? ResolvePath(path) : root_entry->GetChild(path);
   }
 
   // Check if exists (if we need it to), or that it doesn't (if it shouldn't).

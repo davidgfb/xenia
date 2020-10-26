@@ -15,8 +15,13 @@
 
 #include <DXProgrammableCapture.h>
 #include <d3d12.h>
+#include <d3d12sdklayers.h>
 #include <d3dcompiler.h>
 #include <dxgi1_4.h>
+#include <dxgidebug.h>
+
+#include "third_party/DirectXShaderCompiler/include/dxc/dxcapi.h"
+#include "third_party/DirectXShaderCompiler/projects/dxilconv/include/DxbcConverter.h"
 
 #define XELOGD3D XELOGI
 

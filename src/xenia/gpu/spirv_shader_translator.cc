@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2017 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -15,6 +15,7 @@
 #include <cstring>
 #include <vector>
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/cvar.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -232,9 +233,9 @@ void SpirvShaderTranslator::StartTranslation() {
 
     // Create 3 texture types, all aliased on the same binding
     for (int i = 0; i < 3; i++) {
-      tex_[i] = b.createVariable(
-          spv::StorageClass::StorageClassUniformConstant, tex_a_t[i],
-          xe::format_string("textures%dD", i + 2).c_str());
+      tex_[i] = b.createVariable(spv::StorageClass::StorageClassUniformConstant,
+                                 tex_a_t[i],
+                                 fmt::format("textures{}D", i + 2).c_str());
       b.addDecoration(tex_[i], spv::Decoration::DecorationDescriptorSet, 1);
       b.addDecoration(tex_[i], spv::Decoration::DecorationBinding, 0);
     }
@@ -673,7 +674,7 @@ void SpirvShaderTranslator::PostTranslation(Shader* shader) {
         reinterpret_cast<const uint32_t*>(shader->translated_binary().data()),
         shader->translated_binary().size() / sizeof(uint32_t));
     if (validation->has_error()) {
-      XELOGE("SPIR-V Shader Validation failed! Error: %s",
+      XELOGE("SPIR-V Shader Validation failed! Error: {}",
              validation->error_string());
     }
   }
@@ -1072,7 +1073,7 @@ void SpirvShaderTranslator::ProcessCallInstruction(
 
   // Unused instruction(?)
   assert_always();
-  EmitUnimplementedTranslationError();
+  EmitTranslationError("call is unimplemented", false);
 
   assert_true(cf_blocks_.size() > instr.dword_index + 1);
   b.createBranch(cf_blocks_[instr.dword_index + 1].block);
@@ -1087,7 +1088,7 @@ void SpirvShaderTranslator::ProcessReturnInstruction(
 
   // Unused instruction(?)
   assert_always();
-  EmitUnimplementedTranslationError();
+  EmitTranslationError("ret is unimplemented", false);
 
   assert_true(cf_blocks_.size() > instr.dword_index + 1);
   b.createBranch(cf_blocks_[instr.dword_index + 1].block);
@@ -1278,7 +1279,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
 
   spv::Id vertex = 0;
   switch (instr.attributes.data_format) {
-    case VertexFormat::k_8_8_8_8: {
+    case xenos::VertexFormat::k_8_8_8_8: {
       auto vertex_ptr = b.createAccessChain(
           spv::StorageClass::StorageClassUniform, data_ptr, {vertex_idx});
       auto vertex_data = b.createLoad(vertex_ptr);
@@ -1311,7 +1312,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
       }
     } break;
 
-    case VertexFormat::k_16_16: {
+    case xenos::VertexFormat::k_16_16: {
       spv::Id components[1] = {};
       for (uint32_t i = 0; i < 1; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1358,7 +1359,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
       vertex = components[0];
     } break;
 
-    case VertexFormat::k_16_16_16_16: {
+    case xenos::VertexFormat::k_16_16_16_16: {
       spv::Id components[2] = {};
       for (uint32_t i = 0; i < 2; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1406,7 +1407,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           spv::NoPrecision, {components[0], components[1]}, vec4_float_type_);
     } break;
 
-    case VertexFormat::k_16_16_FLOAT: {
+    case xenos::VertexFormat::k_16_16_FLOAT: {
       spv::Id components[1] = {};
       for (uint32_t i = 0; i < 1; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1425,7 +1426,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
       vertex = components[0];
     } break;
 
-    case VertexFormat::k_16_16_16_16_FLOAT: {
+    case xenos::VertexFormat::k_16_16_16_16_FLOAT: {
       spv::Id components[2] = {};
       for (uint32_t i = 0; i < 2; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1445,7 +1446,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           spv::NoPrecision, {components[0], components[1]}, vec4_float_type_);
     } break;
 
-    case VertexFormat::k_32: {
+    case xenos::VertexFormat::k_32: {
       spv::Id components[1] = {};
       for (uint32_t i = 0; i < 1; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1480,7 +1481,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
       vertex = components[0];
     } break;
 
-    case VertexFormat::k_32_32: {
+    case xenos::VertexFormat::k_32_32: {
       spv::Id components[2] = {};
       for (uint32_t i = 0; i < 2; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1515,7 +1516,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
                                           {components[0], components[1]});
     } break;
 
-    case VertexFormat::k_32_32_32_32: {
+    case xenos::VertexFormat::k_32_32_32_32: {
       spv::Id components[4] = {};
       for (uint32_t i = 0; i < 4; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1551,7 +1552,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           {components[0], components[1], components[2], components[3]});
     } break;
 
-    case VertexFormat::k_32_FLOAT: {
+    case xenos::VertexFormat::k_32_FLOAT: {
       auto vertex_ptr = b.createAccessChain(
           spv::StorageClass::StorageClassUniform, data_ptr, {vertex_idx});
       auto vertex_data = b.createLoad(vertex_ptr);
@@ -1559,7 +1560,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
       vertex = b.createUnaryOp(spv::Op::OpBitcast, float_type_, vertex_data);
     } break;
 
-    case VertexFormat::k_32_32_FLOAT: {
+    case xenos::VertexFormat::k_32_32_FLOAT: {
       spv::Id components[2] = {};
       for (uint32_t i = 0; i < 2; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1576,7 +1577,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
                                           {components[0], components[1]});
     } break;
 
-    case VertexFormat::k_32_32_32_FLOAT: {
+    case xenos::VertexFormat::k_32_32_32_FLOAT: {
       spv::Id components[3] = {};
       for (uint32_t i = 0; i < 3; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1593,7 +1594,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           vec3_float_type_, {components[0], components[1], components[2]});
     } break;
 
-    case VertexFormat::k_32_32_32_32_FLOAT: {
+    case xenos::VertexFormat::k_32_32_32_32_FLOAT: {
       spv::Id components[4] = {};
       for (uint32_t i = 0; i < 4; i++) {
         auto index = b.createBinOp(spv::Op::OpIAdd, int_type_, vertex_idx,
@@ -1611,7 +1612,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           {components[0], components[1], components[2], components[3]});
     } break;
 
-    case VertexFormat::k_2_10_10_10: {
+    case xenos::VertexFormat::k_2_10_10_10: {
       auto vertex_ptr = b.createAccessChain(
           spv::StorageClass::StorageClassUniform, data_ptr, {vertex_idx});
       auto vertex_data = b.createLoad(vertex_ptr);
@@ -1658,7 +1659,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
                                              components[2], components[3]}));
     } break;
 
-    case VertexFormat::k_10_11_11: {
+    case xenos::VertexFormat::k_10_11_11: {
       auto vertex_ptr = b.createAccessChain(
           spv::StorageClass::StorageClassUniform, data_ptr, {vertex_idx});
       auto vertex_data = b.createLoad(vertex_ptr);
@@ -1716,7 +1717,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           std::vector<Id>({components[0], components[1], components[2]}));
     } break;
 
-    case VertexFormat::k_11_11_10: {
+    case xenos::VertexFormat::k_11_11_10: {
       auto vertex_ptr = b.createAccessChain(
           spv::StorageClass::StorageClassUniform, data_ptr, {vertex_idx});
       auto vertex_data = b.createLoad(vertex_ptr);
@@ -1767,7 +1768,7 @@ void SpirvShaderTranslator::ProcessVertexFetchInstruction(
           std::vector<Id>({components[0], components[1], components[2]}));
     } break;
 
-    case VertexFormat::kUndefined:
+    case xenos::VertexFormat::kUndefined:
       break;
   }
 
@@ -1814,14 +1815,14 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
 
   uint32_t dim_idx = 0;
   switch (instr.dimension) {
-    case TextureDimension::k1D:
-    case TextureDimension::k2D: {
+    case xenos::FetchOpDimension::k1D:
+    case xenos::FetchOpDimension::k2D: {
       dim_idx = 0;
     } break;
-    case TextureDimension::k3D: {
+    case xenos::FetchOpDimension::k3DOrStacked: {
       dim_idx = 1;
     } break;
-    case TextureDimension::kCube: {
+    case xenos::FetchOpDimension::kCube: {
       dim_idx = 2;
     } break;
     default:
@@ -1837,7 +1838,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
                               tex_[dim_idx], std::vector<Id>({texture_index}));
       auto texture = b.createLoad(texture_ptr);
 
-      if (instr.dimension == TextureDimension::k1D) {
+      if (instr.dimension == xenos::FetchOpDimension::k1D) {
         // Upgrade 1D src coordinate into 2D
         src = b.createCompositeConstruct(vec2_float_type_,
                                          {src, b.makeFloatConstant(0.f)});
@@ -1862,7 +1863,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
 
         Id offset = 0;
         switch (instr.dimension) {
-          case TextureDimension::k1D: {
+          case xenos::FetchOpDimension::k1D: {
             // https://msdn.microsoft.com/en-us/library/windows/desktop/bb944006.aspx
             // "Because the runtime does not support 1D textures, the compiler
             // will use a 2D texture with the knowledge that the y-coordinate is
@@ -1871,18 +1872,18 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
                 vec2_int_type_,
                 {b.makeIntConstant(int(offset_x)), b.makeIntConstant(0)});
           } break;
-          case TextureDimension::k2D: {
+          case xenos::FetchOpDimension::k2D: {
             offset = b.makeCompositeConstant(
                 vec2_int_type_, {b.makeIntConstant(int(offset_x)),
                                  b.makeIntConstant(int(offset_y))});
           } break;
-          case TextureDimension::k3D: {
+          case xenos::FetchOpDimension::k3DOrStacked: {
             offset = b.makeCompositeConstant(
                 vec3_int_type_, {b.makeIntConstant(int(offset_x)),
                                  b.makeIntConstant(int(offset_y)),
                                  b.makeIntConstant(int(offset_z))});
           } break;
-          case TextureDimension::kCube: {
+          case xenos::FetchOpDimension::kCube: {
             // FIXME(DrChat): Is this the correct dimension? I forget
             offset = b.makeCompositeConstant(
                 vec3_int_type_, {b.makeIntConstant(int(offset_x)),
@@ -1925,8 +1926,8 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
           b.createUnaryOp(spv::OpImage, b.getImageType(texture), texture);
 
       switch (instr.dimension) {
-        case TextureDimension::k1D:
-        case TextureDimension::k2D: {
+        case xenos::FetchOpDimension::k1D:
+        case xenos::FetchOpDimension::k2D: {
           spv::Builder::TextureParameters params;
           std::memset(&params, 0, sizeof(params));
           params.sampler = image;
@@ -1965,7 +1966,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
                               tex_[dim_idx], std::vector<Id>({texture_index}));
       auto texture = b.createLoad(texture_ptr);
 
-      if (instr.dimension == TextureDimension::k1D) {
+      if (instr.dimension == xenos::FetchOpDimension::k1D) {
         // Upgrade 1D src coordinate into 2D
         src = b.createCompositeConstruct(vec2_float_type_,
                                          {src, b.makeFloatConstant(0.f)});
@@ -2002,7 +2003,7 @@ void SpirvShaderTranslator::ProcessTextureFetchInstruction(
 
 void SpirvShaderTranslator::ProcessAluInstruction(
     const ParsedAluInstruction& instr) {
-  if (instr.is_nop()) {
+  if (instr.IsNop()) {
     return;
   }
 
@@ -2043,7 +2044,7 @@ void SpirvShaderTranslator::ProcessAluInstruction(
       ProcessScalarAluOperation(instr, close_predicated_block_scalar);
 
   if (store_vector) {
-    StoreToResult(b.createLoad(pv_), instr.vector_result);
+    StoreToResult(b.createLoad(pv_), instr.vector_and_constant_result);
   }
   if (store_scalar) {
     StoreToResult(b.createLoad(ps_), instr.scalar_result);
@@ -2251,7 +2252,8 @@ bool SpirvShaderTranslator::ProcessVectorAluOperation(
     const ParsedAluInstruction& instr, bool& close_predicated_block) {
   close_predicated_block = false;
 
-  if (!instr.has_vector_op) {
+  if (!instr.vector_and_constant_result.GetUsedWriteMask() &&
+      !AluVectorOpHasSideEffects(instr.vector_opcode)) {
     return false;
   }
 
@@ -2260,7 +2262,7 @@ bool SpirvShaderTranslator::ProcessVectorAluOperation(
   // TODO: If we have identical operands, reuse previous one.
   Id sources[3] = {0};
   Id dest = vec4_float_zero_;
-  for (size_t i = 0; i < instr.vector_operand_count; i++) {
+  for (uint32_t i = 0; i < instr.vector_operand_count; i++) {
     sources[i] = LoadFromOperand(instr.vector_operands[i]);
   }
 
@@ -2635,7 +2637,8 @@ bool SpirvShaderTranslator::ProcessScalarAluOperation(
     const ParsedAluInstruction& instr, bool& close_predicated_block) {
   close_predicated_block = false;
 
-  if (!instr.has_scalar_op) {
+  if (instr.scalar_opcode == ucode::AluScalarOpcode::kRetainPrev &&
+      !instr.scalar_result.GetUsedWriteMask()) {
     return false;
   }
 
@@ -2644,12 +2647,12 @@ bool SpirvShaderTranslator::ProcessScalarAluOperation(
   // TODO: If we have identical operands, reuse previous one.
   Id sources[3] = {0};
   Id dest = b.makeFloatConstant(0);
-  for (size_t i = 0, x = 0; i < instr.scalar_operand_count; i++) {
+  for (uint32_t i = 0, x = 0; i < instr.scalar_operand_count; i++) {
     auto src = LoadFromOperand(instr.scalar_operands[i]);
 
     // Pull components out of the vector operands and use them as sources.
     if (instr.scalar_operands[i].component_count > 1) {
-      for (int j = 0; j < instr.scalar_operands[i].component_count; j++) {
+      for (uint32_t j = 0; j < instr.scalar_operands[i].component_count; j++) {
         sources[x++] = b.createCompositeExtract(src, float_type_, j);
       }
     } else {
@@ -3190,7 +3193,7 @@ Id SpirvShaderTranslator::LoadFromOperand(const InstructionOperand& op) {
   }
 
   // swizzle
-  if (op.component_count > 1 && !op.is_standard_swizzle()) {
+  if (op.component_count > 1 && !op.IsStandardSwizzle()) {
     std::vector<uint32_t> operands;
     operands.push_back(storage_value);
     operands.push_back(b.makeCompositeConstant(
@@ -3199,7 +3202,7 @@ Id SpirvShaderTranslator::LoadFromOperand(const InstructionOperand& op) {
 
     // Components start from left and are duplicated rightwards
     // e.g. count = 1, xxxx / count = 2, xyyy ...
-    for (int i = 0; i < 4; i++) {
+    for (uint32_t i = 0; i < 4; i++) {
       auto swiz = op.components[i];
       if (i > op.component_count - 1) {
         swiz = op.components[op.component_count - 1];
@@ -3243,7 +3246,8 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
     return;
   }
 
-  if (!result.has_any_writes()) {
+  uint32_t used_write_mask = result.GetUsedWriteMask();
+  if (!used_write_mask) {
     return;
   }
 
@@ -3284,7 +3288,7 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
       storage_array = true;
       assert_true(uint32_t(result.storage_index) < register_count());
       break;
-    case InstructionStorageTarget::kInterpolant:
+    case InstructionStorageTarget::kInterpolator:
       assert_true(is_vertex_shader());
       storage_pointer = interpolators_;
       storage_class = spv::StorageClass::StorageClassOutput;
@@ -3309,7 +3313,7 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
       storage_offsets.push_back(0);
       storage_array = false;
       break;
-    case InstructionStorageTarget::kColorTarget:
+    case InstructionStorageTarget::kColor:
       assert_true(is_pixel_shader());
       assert_not_zero(frag_outputs_);
       storage_pointer = frag_outputs_;
@@ -3350,7 +3354,7 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
 
   // Only load from storage if we need it later.
   Id storage_value = 0;
-  if ((source_is_scalar && !storage_is_scalar) || !result.has_all_writes()) {
+  if ((source_is_scalar && !storage_is_scalar) || used_write_mask != 0b1111) {
     storage_value = b.createLoad(storage_pointer);
   }
 
@@ -3365,7 +3369,7 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
   }
 
   // destination swizzle
-  if (!result.is_standard_swizzle() && !source_is_scalar) {
+  if (!result.IsStandardSwizzle() && !source_is_scalar) {
     std::vector<uint32_t> operands;
     operands.push_back(source_value_id);
     operands.push_back(b.makeCompositeConstant(
@@ -3376,7 +3380,7 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
     // e.g. count = 1, xxxx / count = 2, xyyy ...
     uint32_t source_components = b.getNumComponents(source_value_id);
     for (int i = 0; i < 4; i++) {
-      if (!result.write_mask[i]) {
+      if (!(used_write_mask & (1 << i))) {
         // Undefined / don't care.
         operands.push_back(0);
         continue;
@@ -3410,29 +3414,30 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
   }
 
   // write mask
-  if (!result.has_all_writes() && !source_is_scalar && !storage_is_scalar) {
+  if (used_write_mask != 0b1111 && !source_is_scalar && !storage_is_scalar) {
     std::vector<uint32_t> operands;
     operands.push_back(source_value_id);
     operands.push_back(storage_value);
 
     for (int i = 0; i < b.getNumTypeComponents(storage_type); i++) {
-      operands.push_back(
-          result.write_mask[i] ? i : b.getNumComponents(source_value_id) + i);
+      operands.push_back((used_write_mask & (1 << i))
+                             ? i
+                             : b.getNumComponents(source_value_id) + i);
     }
 
     source_value_id =
         b.createOp(spv::Op::OpVectorShuffle, storage_type, operands);
   } else if (source_is_scalar && !storage_is_scalar) {
-    assert_true(result.num_writes() >= 1);
+    assert_not_zero(used_write_mask);
 
-    if (result.has_all_writes()) {
+    if (used_write_mask == 0b1111) {
       source_value_id =
           b.smearScalar(spv::NoPrecision, source_value_id, storage_type);
     } else {
       // Find first enabled component
       uint32_t index = 0;
       for (uint32_t i = 0; i < 4; i++) {
-        if (result.write_mask[i]) {
+        if (used_write_mask & (1 << i)) {
           index = i;
           break;
         }
@@ -3442,10 +3447,10 @@ void SpirvShaderTranslator::StoreToResult(Id source_value_id,
     }
   } else if (!source_is_scalar && storage_is_scalar) {
     // Num writes /needs/ to be 1, and let's assume it's the first element.
-    assert_true(result.num_writes() == 1);
+    assert_true(xe::bit_count(used_write_mask) == 1);
 
     for (uint32_t i = 0; i < 4; i++) {
-      if (result.write_mask[i]) {
+      if (used_write_mask & (1 << i)) {
         source_value_id =
             b.createCompositeExtract(source_value_id, storage_type, 0);
         break;

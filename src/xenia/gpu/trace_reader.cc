@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2015 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -12,7 +12,7 @@
 #include <cinttypes>
 
 #include "third_party/snappy/snappy.h"
-
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/mapped_memory.h"
 #include "xenia/base/math.h"
@@ -23,7 +23,7 @@
 namespace xe {
 namespace gpu {
 
-bool TraceReader::Open(const std::wstring& path) {
+bool TraceReader::Open(const std::filesystem::path& path) {
   Close();
 
   mmap_ = MappedMemory::Open(path, MappedMemory::Mode::kRead);
@@ -37,7 +37,7 @@ bool TraceReader::Open(const std::wstring& path) {
   // Verify version.
   auto header = reinterpret_cast<const TraceHeader*>(trace_data_);
   if (header->version != kTraceFormatVersion) {
-    XELOGE("Trace format version mismatch, code has %u, file has %u",
+    XELOGE("Trace format version mismatch, code has {}, file has {}",
            kTraceFormatVersion, header->version);
     if (header->version < kTraceFormatVersion) {
       XELOGE("You need to regenerate your trace for the latest version");
@@ -45,13 +45,12 @@ bool TraceReader::Open(const std::wstring& path) {
     return false;
   }
 
-  auto path_str = xe::to_string(path);
-  XELOGI("Mapped %" PRId64 "b trace from %s", trace_size_, path_str.c_str());
-  XELOGI("   Version: %u", header->version);
+  XELOGI("Mapped {}b trace from {}", trace_size_, xe::path_to_utf8(path));
+  XELOGI("   Version: {}", header->version);
   auto commit_str = std::string(header->build_commit_sha,
                                 xe::countof(header->build_commit_sha));
-  XELOGI("    Commit: %s", commit_str.c_str());
-  XELOGI("  Title ID: %u", header->title_id);
+  XELOGI("    Commit: {}", commit_str);
+  XELOGI("  Title ID: {}", header->title_id);
 
   ParseTrace();
 
@@ -190,8 +189,8 @@ void TraceReader::ParseTrace() {
         trace_ptr += sizeof(*cmd) + cmd->encoded_length;
         break;
       }
-      case TraceCommandType::kEDRAMSnapshot: {
-        auto cmd = reinterpret_cast<const EDRAMSnapshotCommand*>(trace_ptr);
+      case TraceCommandType::kEdramSnapshot: {
+        auto cmd = reinterpret_cast<const EdramSnapshotCommand*>(trace_ptr);
         trace_ptr += sizeof(*cmd) + cmd->encoded_length;
         break;
       }

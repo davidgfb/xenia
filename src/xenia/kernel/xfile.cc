@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -37,15 +37,15 @@ XFile::~XFile() {
 }
 
 X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
-                               size_t length, const char* file_name,
+                               size_t length, const std::string_view file_name,
                                bool restart) {
   assert_not_null(out_info);
 
   vfs::Entry* entry = nullptr;
 
-  if (file_name != nullptr) {
+  if (!file_name.empty()) {
     // Only queries in the current directory are supported for now.
-    assert_true(std::strchr(file_name, '\\') == nullptr);
+    assert_true(utf8::find_any_of(file_name, "\\") == std::string_view::npos);
 
     find_engine_.SetRule(file_name);
 
@@ -226,7 +226,8 @@ void XFile::RemoveIOCompletionPort(uint32_t key) {
 }
 
 bool XFile::Save(ByteStream* stream) {
-  XELOGD("XFile %.8X (%s)", handle(), file_->entry()->absolute_path().c_str());
+  XELOGD("XFile {:08X} ({})", handle(),
+         file_->entry()->absolute_path().c_str());
 
   if (!SaveObject(stream)) {
     return false;
@@ -257,15 +258,15 @@ object_ref<XFile> XFile::Restore(KernelState* kernel_state,
   auto is_directory = stream->Read<bool>();
   auto is_synchronous = stream->Read<bool>();
 
-  XELOGD("XFile %.8X (%s)", file->handle(), abs_path.c_str());
+  XELOGD("XFile {:08X} ({})", file->handle(), abs_path);
 
   vfs::File* vfs_file = nullptr;
   vfs::FileAction action;
   auto res = kernel_state->file_system()->OpenFile(
-      abs_path, vfs::FileDisposition::kOpen, access, is_directory, &vfs_file,
-      &action);
+      nullptr, abs_path, vfs::FileDisposition::kOpen, access, is_directory,
+      &vfs_file, &action);
   if (XFAILED(res)) {
-    XELOGE("Failed to open XFile: error %.8X", res);
+    XELOGE("Failed to open XFile: error {:08X}", res);
     return object_ref<XFile>(file);
   }
 

@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -14,13 +14,15 @@
 #include "xenia/kernel/xenumerator.h"
 #include "xenia/xbox.h"
 
-DEFINE_int32(license_mask, 0,
-             "Set license mask for activated content: "
-             "0 - disable all licenses / "
-             "1 - enable the first license - usually the full version license "
-             "in Xbox Live Arcade games / "
-             "-1 or 0xFFFFFFFF - enable all possible licenses.",
-             "Content");
+DEFINE_int32(
+    license_mask, 0,
+    "Set license mask for activated content.\n"
+    " 0 = No licenses enabled.\n"
+    " 1 = First license enabled. Generally the full version license in\n"
+    "     Xbox Live Arcade titles.\n"
+    " -1 or 0xFFFFFFFF = All possible licenses enabled. Generally a\n"
+    "                    bad idea, could lead to undefined behavior.",
+    "Content");
 
 namespace xe {
 namespace kernel {
@@ -31,7 +33,7 @@ struct DeviceInfo {
   uint32_t device_type;
   uint64_t total_bytes;
   uint64_t free_bytes;
-  wchar_t name[28];
+  char16_t name[28];
 };
 
 // TODO(gibbed): real information.
@@ -43,12 +45,15 @@ struct DeviceInfo {
 // they incorrectly only look at the lower 32-bits of free_bytes,
 // when it is a 64-bit value. Which means any size above ~4GB
 // will not be recognized properly.
+//
+// NOTE(randprint): you can use 120 GB and 42 GB 'fullness'
+// with the proper deviceID feel free to change at your discression
 #define ONE_GB (1024ull * 1024ull * 1024ull)
 static const DeviceInfo dummy_device_info_ = {
-    0xF00D0000,    1,
-    4ull * ONE_GB,  // 4GB
-    3ull * ONE_GB,  // 3GB, so it looks a little used.
-    L"Dummy HDD",
+    0x00000001,    1,  // found from debugging / reversing UE3 engine titles
+    4ull * ONE_GB,     // 4GB
+    3ull * ONE_GB,     // 3GB, so it looks a little used.
+    u"Dummy HDD",
 };
 #undef ONE_GB
 
@@ -70,26 +75,26 @@ dword_result_t XamContentGetLicenseMask(lpdword_t mask_ptr,
 DECLARE_XAM_EXPORT2(XamContentGetLicenseMask, kContent, kStub, kHighFrequency);
 
 dword_result_t XamContentGetDeviceName(dword_t device_id,
-                                       lpwstring_t name_buffer,
+                                       lpu16string_t name_buffer,
                                        dword_t name_capacity) {
-  if ((device_id & 0xFFFF0000) != dummy_device_info_.device_id) {
+  if ((device_id & 0x0000000F) != dummy_device_info_.device_id) {
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
 
-  auto name = std::wstring(dummy_device_info_.name);
+  auto name = std::u16string(dummy_device_info_.name);
   if (name_capacity < name.size() + 1) {
     return X_ERROR_INSUFFICIENT_BUFFER;
   }
 
-  xe::store_and_swap<std::wstring>(name_buffer, name);
-  ((wchar_t*)name_buffer)[name.size()] = 0;
+  xe::store_and_swap<std::u16string>(name_buffer, name);
+  ((char16_t*)name_buffer)[name.size()] = 0;
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamContentGetDeviceName, kContent, kImplemented);
 
 dword_result_t XamContentGetDeviceState(dword_t device_id,
                                         lpunknown_t overlapped_ptr) {
-  if ((device_id & 0xFFFF0000) != dummy_device_info_.device_id) {
+  if ((device_id & 0x0000000F) != dummy_device_info_.device_id) {
     if (overlapped_ptr) {
       kernel_state()->CompleteOverlappedImmediateEx(
           overlapped_ptr, X_ERROR_FUNCTION_FAILED, X_ERROR_DEVICE_NOT_CONNECTED,
@@ -121,7 +126,7 @@ static_assert_size(X_CONTENT_DEVICE_DATA, 0x50);
 
 dword_result_t XamContentGetDeviceData(
     dword_t device_id, pointer_t<X_CONTENT_DEVICE_DATA> device_data) {
-  if ((device_id & 0xFFFF0000) != dummy_device_info_.device_id) {
+  if ((device_id & 0x0000000F) != dummy_device_info_.device_id) {
     // TODO(benvanik): memset 0 the data?
     return X_ERROR_DEVICE_NOT_CONNECTED;
   }
@@ -132,7 +137,7 @@ dword_result_t XamContentGetDeviceData(
   device_data->unknown = device_id & 0xFFFF;  // Fake it.
   device_data->total_bytes = device_info.total_bytes;
   device_data->free_bytes = device_info.free_bytes;
-  xe::store_and_swap<std::wstring>(&device_data->name[0], device_info.name);
+  xe::store_and_swap<std::u16string>(&device_data->name[0], device_info.name);
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamContentGetDeviceData, kContent, kImplemented);
@@ -160,7 +165,7 @@ dword_result_t XamContentCreateEnumerator(dword_t user_index, dword_t device_id,
                                           lpdword_t buffer_size_ptr,
                                           lpdword_t handle_out) {
   assert_not_null(handle_out);
-  if ((device_id && (device_id & 0xFFFF0000) != dummy_device_info_.device_id) ||
+  if ((device_id && (device_id & 0x0000000F) != dummy_device_info_.device_id) ||
       !handle_out) {
     if (buffer_size_ptr) {
       *buffer_size_ptr = 0;
@@ -189,7 +194,7 @@ dword_result_t XamContentCreateEnumerator(dword_t user_index, dword_t device_id,
     content_data.Write(ptr);
   }
 
-  XELOGD("XamContentCreateEnumerator: added %d items to enumerator",
+  XELOGD("XamContentCreateEnumerator: added {} items to enumerator",
          e->item_count());
 
   *handle_out = e->handle();
@@ -330,6 +335,16 @@ dword_result_t XamContentCreate(dword_t user_index, lpstring_t root_name,
                             overlapped_ptr);
 }
 DECLARE_XAM_EXPORT1(XamContentCreate, kContent, kImplemented);
+
+dword_result_t XamContentCreateInternal(
+    lpstring_t root_name, lpvoid_t content_data_ptr, dword_t flags,
+    lpdword_t disposition_ptr, lpdword_t license_mask_ptr, dword_t cache_size,
+    qword_t content_size, lpvoid_t overlapped_ptr) {
+  return XamContentCreateEx(0xFE, root_name, content_data_ptr, flags,
+                            disposition_ptr, license_mask_ptr, cache_size,
+                            content_size, overlapped_ptr);
+}
+DECLARE_XAM_EXPORT1(XamContentCreateInternal, kContent, kImplemented);
 
 dword_result_t XamContentOpenFile(dword_t user_index, lpstring_t root_name,
                                   lpstring_t path, dword_t flags,
@@ -473,6 +488,14 @@ dword_result_t XamContentDelete(dword_t user_index, lpvoid_t content_data_ptr,
   }
 }
 DECLARE_XAM_EXPORT1(XamContentDelete, kContent, kImplemented);
+
+dword_result_t XamContentDeleteInternal(lpvoid_t content_data_ptr,
+                                        lpunknown_t overlapped_ptr) {
+  // INFO: Analysis of xam.xex shows that "internal" functions are wrappers with
+  // 0xFE as user_index
+  return XamContentDelete(0xFE, content_data_ptr, overlapped_ptr);
+}
+DECLARE_XAM_EXPORT1(XamContentDeleteInternal, kContent, kImplemented);
 
 void RegisterContentExports(xe::cpu::ExportResolver* export_resolver,
                             KernelState* kernel_state) {}

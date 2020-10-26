@@ -29,13 +29,12 @@ class ShaderTranslator {
  public:
   virtual ~ShaderTranslator();
 
-  // Gathers all vertex/texture bindings. Implicitly called in Translate.
-  // DEPRECATED(benvanik): remove this when shader cache is removed.
-  bool GatherAllBindingInformation(Shader* shader);
-
-  bool Translate(Shader* shader, PrimitiveType patch_type,
-                 reg::SQ_PROGRAM_CNTL cntl);
-  bool Translate(Shader* shader, PrimitiveType patch_type);
+  bool Translate(Shader* shader, reg::SQ_PROGRAM_CNTL cntl,
+                 Shader::HostVertexShaderType host_vertex_shader_type =
+                     Shader::HostVertexShaderType::kVertex);
+  bool Translate(Shader* shader,
+                 Shader::HostVertexShaderType host_vertex_shader_type =
+                     Shader::HostVertexShaderType::kVertex);
 
  protected:
   ShaderTranslator();
@@ -46,21 +45,34 @@ class ShaderTranslator {
   // Register count.
   uint32_t register_count() const { return register_count_; }
   // True if the current shader is a vertex shader.
-  bool is_vertex_shader() const { return shader_type_ == ShaderType::kVertex; }
-  // Tessellation patch primitive type for a vertex shader translated into a
-  // domain shader, or PrimitiveType::kNone for a normal vertex shader.
-  PrimitiveType patch_primitive_type() const { return patch_primitive_type_; }
+  bool is_vertex_shader() const {
+    return shader_type_ == xenos::ShaderType::kVertex;
+  }
+  // If translating a vertex shader, type of the shader in a D3D11-like
+  // rendering pipeline.
+  Shader::HostVertexShaderType host_vertex_shader_type() const {
+    return host_vertex_shader_type_;
+  }
   // True if the current shader is a pixel shader.
-  bool is_pixel_shader() const { return shader_type_ == ShaderType::kPixel; }
+  bool is_pixel_shader() const {
+    return shader_type_ == xenos::ShaderType::kPixel;
+  }
+  // Labels that jumps (explicit or from loops) can be done to, gathered before
+  // translation.
+  const std::set<uint32_t>& label_addresses() const { return label_addresses_; }
+  // Used constant register info, populated before translation.
   const Shader::ConstantRegisterMap& constant_register_map() const {
     return constant_register_map_;
   }
   // True if the current shader addresses general-purpose registers with dynamic
-  // indices.
+  // indices, set before translation. Doesn't include writes to r[#+a#] with an
+  // empty used write mask.
   bool uses_register_dynamic_addressing() const {
     return uses_register_dynamic_addressing_;
   }
-  // True if the current shader writes to a color target on any execution path.
+  // True if the current shader writes to a color target on any execution path,
+  // set before translation. Doesn't include writes with an empty used write
+  // mask.
   bool writes_color_target(int i) const { return writes_color_targets_[i]; }
   bool writes_any_color_target() const {
     for (size_t i = 0; i < xe::countof(writes_color_targets_); ++i) {
@@ -70,7 +82,8 @@ class ShaderTranslator {
     }
     return false;
   }
-  // True if the current shader overrides the pixel depth.
+  // True if the current shader overrides the pixel depth, set before
+  // translation. Doesn't include writes with an empty used write mask.
   bool writes_depth() const { return writes_depth_; }
   // True if Xenia can automatically enable early depth/stencil for the pixel
   // shader when RB_DEPTHCONTROL EARLY_Z_ENABLE is not set, provided alpha
@@ -104,10 +117,7 @@ class ShaderTranslator {
   // Ucode disassembly buffer accumulated during translation.
   StringBuffer& ucode_disasm_buffer() { return ucode_disasm_buffer_; }
   // Emits a translation error that will be passed back in the result.
-  virtual void EmitTranslationError(const char* message);
-  // Emits a translation error indicating that the current translation is not
-  // implemented or supported.
-  virtual void EmitUnimplementedTranslationError();
+  virtual void EmitTranslationError(const char* message, bool is_fatal = true);
 
   // Handles the start of translation.
   // At this point the vertex and texture bindings have been gathered.
@@ -176,19 +186,19 @@ class ShaderTranslator {
  private:
   struct AluOpcodeInfo {
     const char* name;
-    size_t argument_count;
-    int src_swizzle_component_count;
+    uint32_t argument_count;
+    uint32_t src_swizzle_component_count;
     bool disable_implicit_early_z;
   };
 
-  bool TranslateInternal(Shader* shader, PrimitiveType patch_type);
+  bool TranslateInternal(Shader* shader,
+                         Shader::HostVertexShaderType host_vertex_shader_type);
 
   void MarkUcodeInstruction(uint32_t dword_offset);
   void AppendUcodeDisasm(char c);
   void AppendUcodeDisasm(const char* value);
   void AppendUcodeDisasmFormat(const char* format, ...);
 
-  bool TranslateBlocks();
   void GatherInstructionInformation(const ucode::ControlFlowInstruction& cf);
   void GatherVertexFetchInformation(const ucode::VertexFetchInstruction& op);
   void GatherTextureFetchInformation(const ucode::TextureFetchInstruction& op);
@@ -223,14 +233,20 @@ class ShaderTranslator {
                                     ParsedTextureFetchInstruction* out_instr);
 
   void TranslateAluInstruction(const ucode::AluInstruction& op);
-  void ParseAluVectorOperation(const ucode::AluInstruction& op,
-                               ParsedAluInstruction& instr);
-  void ParseAluScalarOperation(const ucode::AluInstruction& op,
-                               ParsedAluInstruction& instr);
+  void ParseAluInstruction(const ucode::AluInstruction& op,
+                           ParsedAluInstruction& out_instr) const;
+  static void ParseAluInstructionOperand(const ucode::AluInstruction& op,
+                                         uint32_t i,
+                                         uint32_t swizzle_component_count,
+                                         InstructionOperand& out_op);
+  static void ParseAluInstructionOperandSpecial(
+      const ucode::AluInstruction& op, InstructionStorageSource storage_source,
+      uint32_t reg, bool negate, int const_slot, uint32_t component_index,
+      InstructionOperand& out_op);
 
   // Input shader metadata and microcode.
-  ShaderType shader_type_;
-  PrimitiveType patch_primitive_type_;
+  xenos::ShaderType shader_type_;
+  Shader::HostVertexShaderType host_vertex_shader_type_;
   const uint32_t* ucode_dwords_;
   size_t ucode_dword_count_;
   reg::SQ_PROGRAM_CNTL program_cntl_;
@@ -252,6 +268,10 @@ class ShaderTranslator {
   // Kept for supporting vfetch_mini.
   ucode::VertexFetchInstruction previous_vfetch_full_;
 
+  // Labels that jumps (explicit or from loops) can be done to, gathered before
+  // translation.
+  std::set<uint32_t> label_addresses_;
+
   // Detected binding information gathered before translation.
   int total_attrib_count_ = 0;
   std::vector<Shader::VertexBinding> vertex_bindings_;
@@ -259,12 +279,16 @@ class ShaderTranslator {
   uint32_t unique_vertex_bindings_ = 0;
   uint32_t unique_texture_bindings_ = 0;
 
+  // These all are gathered before translation.
+  // uses_register_dynamic_addressing_ for writes, writes_color_targets_,
+  // writes_depth_ don't include empty used write masks.
   Shader::ConstantRegisterMap constant_register_map_ = {0};
   bool uses_register_dynamic_addressing_ = false;
   bool writes_color_targets_[4] = {false, false, false, false};
   bool writes_depth_ = false;
   bool implicit_early_z_allowed_ = true;
 
+  // Memexport info is gathered before translation.
   uint32_t memexport_alloc_count_ = 0;
   // For register allocation in implementations - what was used after each
   // `alloc export`.

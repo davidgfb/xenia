@@ -14,6 +14,7 @@
 
 #include <xinput.h>  // NOLINT(build/include_order)
 
+#include "xenia/base/logging.h"
 #include "xenia/hid/hid_flags.h"
 
 namespace xe {
@@ -71,6 +72,12 @@ X_STATUS XInputInputDriver::Setup() {
   XInputGetKeystroke_ = xigk;
   XInputSetState_ = xiss;
   XInputEnable_ = xie;
+
+  if (cvars::guide_button) {
+    // Theoretically there is XInputGetStateEx
+    // but thats undocumented and milage varies.
+    XELOGW("XInput: Guide button support is not implemented.");
+  }
   return X_STATUS_SUCCESS;
 }
 
@@ -142,12 +149,16 @@ X_RESULT XInputInputDriver::GetKeystroke(uint32_t user_index, uint32_t flags,
   // https://stackoverflow.com/questions/23669238/xinputgetkeystroke-returning-error-success-while-controller-is-unplugged
   //
   // So we first check if the device is connected via XInputGetCapabilities, so
-  // we are not passing back an uninitialized X_INPUT_KEYSTROKE structure:
-  XINPUT_CAPABILITIES caps;
-  auto xigc = (decltype(&XInputGetCapabilities))XInputGetCapabilities_;
-  result = xigc(user_index, 0, &caps);
-  if (result) {
-    return result;
+  // we are not passing back an uninitialized X_INPUT_KEYSTROKE structure.
+  // If any user (0xFF) is polled this bug does not occur but GetCapabilities
+  // would fail so we need to skip it.
+  if (user_index != 0xFF) {
+    XINPUT_CAPABILITIES caps;
+    auto xigc = (decltype(&XInputGetCapabilities))XInputGetCapabilities_;
+    result = xigc(user_index, 0, &caps);
+    if (result) {
+      return result;
+    }
   }
 
   XINPUT_KEYSTROKE native_keystroke;

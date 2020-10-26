@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2015 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -16,8 +16,10 @@
 
 #include "build/version.h"
 #include "xenia/base/assert.h"
+#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/string.h"
+#include "xenia/gpu/xenos.h"
 
 namespace xe {
 namespace gpu {
@@ -27,13 +29,13 @@ TraceWriter::TraceWriter(uint8_t* membase)
 
 TraceWriter::~TraceWriter() = default;
 
-bool TraceWriter::Open(const std::wstring& path, uint32_t title_id) {
+bool TraceWriter::Open(const std::filesystem::path& path, uint32_t title_id) {
   Close();
 
-  auto canonical_path = xe::to_absolute_path(path);
-  auto base_path = xe::find_base_path(canonical_path);
-  if (!base_path.empty()) {
-    xe::filesystem::CreateFolder(base_path);
+  auto canonical_path = std::filesystem::absolute(path);
+  if (canonical_path.has_parent_path()) {
+    auto base_path = canonical_path.parent_path();
+    std::filesystem::create_directories(base_path);
   }
 
   file_ = xe::filesystem::OpenFile(canonical_path, "wb");
@@ -229,10 +231,9 @@ void TraceWriter::WriteMemoryCommand(TraceCommandType type, uint32_t base_ptr,
   }
 }
 
-void TraceWriter::WriteEDRAMSnapshot(const void* snapshot) {
-  const uint32_t kEDRAMSize = 10 * 1024 * 1024;
-  EDRAMSnapshotCommand cmd;
-  cmd.type = TraceCommandType::kEDRAMSnapshot;
+void TraceWriter::WriteEdramSnapshot(const void* snapshot) {
+  EdramSnapshotCommand cmd;
+  cmd.type = TraceCommandType::kEdramSnapshot;
   if (compress_output_) {
     // Write the header now so we reserve space in the buffer.
     long header_position = std::ftell(file_);
@@ -241,7 +242,7 @@ void TraceWriter::WriteEDRAMSnapshot(const void* snapshot) {
 
     // Stream the content right to the buffer.
     snappy::ByteArraySource snappy_source(
-        reinterpret_cast<const char*>(snapshot), kEDRAMSize);
+        reinterpret_cast<const char*>(snapshot), xenos::kEdramSizeBytes);
     SnappySink snappy_sink(file_);
     cmd.encoded_length =
         static_cast<uint32_t>(snappy::Compress(&snappy_source, &snappy_sink));
@@ -254,9 +255,9 @@ void TraceWriter::WriteEDRAMSnapshot(const void* snapshot) {
   } else {
     // Uncompressed - write buffer directly to the file.
     cmd.encoding_format = MemoryEncodingFormat::kNone;
-    cmd.encoded_length = kEDRAMSize;
+    cmd.encoded_length = xenos::kEdramSizeBytes;
     fwrite(&cmd, 1, sizeof(cmd), file_);
-    fwrite(snapshot, 1, kEDRAMSize, file_);
+    fwrite(snapshot, 1, xenos::kEdramSizeBytes, file_);
   }
 }
 

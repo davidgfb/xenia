@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2015 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -16,7 +16,7 @@ namespace xe {
 namespace gpu {
 
 // Trace file extension.
-static const wchar_t kTraceExtension[] = L"xtr";
+static const char kTraceExtension[] = "xtr";
 
 // Any byte changes to the files should bump this version.
 // Only builds with matching versions will work.
@@ -51,7 +51,7 @@ enum class TraceCommandType : uint32_t {
   kPacketEnd,
   kMemoryRead,
   kMemoryWrite,
-  kEDRAMSnapshot,
+  kEdramSnapshot,
   kEvent,
 };
 
@@ -115,7 +115,7 @@ struct MemoryCommand {
 // (since replaying the trace will reconstruct its state at any point later) as
 // a sequence of tiles with row-major samples (2x multisampling as 1x2 samples,
 // 4x as 2x2 samples).
-struct EDRAMSnapshotCommand {
+struct EdramSnapshotCommand {
   TraceCommandType type;
   // Encoding format of the data in the trace file.
   MemoryEncodingFormat encoding_format;

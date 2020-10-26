@@ -117,8 +117,8 @@ int32_t format_core(PPCContext* ppc_context, FormatData& data, ArgList& args,
                     const bool wide) {
   int32_t count = 0;
 
-  char work[512];
-  wchar_t wwork[4];
+  char work8[512];
+  char16_t work16[4];
 
   struct {
     const void* buffer;
@@ -339,13 +339,13 @@ int32_t format_core(PPCContext* ppc_context, FormatData& data, ArgList& args,
             auto value = args.get32();
 
             if (!is_wide) {
-              work[0] = (uint8_t)value;
-              text.buffer = &work[0];
+              work8[0] = (uint8_t)value;
+              text.buffer = &work8[0];
               text.length = 1;
               text.is_wide = false;
             } else {
-              wwork[0] = (uint16_t)value;
-              text.buffer = &wwork[0];
+              work16[0] = (uint16_t)value;
+              text.buffer = &work16[0];
               text.length = 1;
               text.is_wide = true;
               text.swap_wide = false;
@@ -378,7 +378,7 @@ int32_t format_core(PPCContext* ppc_context, FormatData& data, ArgList& args,
             }
 
             if (precision >= 0) {
-              precision = std::min(precision, (int32_t)xe::countof(work));
+              precision = std::min(precision, (int32_t)xe::countof(work8));
             } else {
               precision = 1;
             }
@@ -396,7 +396,7 @@ int32_t format_core(PPCContext* ppc_context, FormatData& data, ArgList& args,
               prefix.length = 0;
             }
 
-            char* end = &work[xe::countof(work) - 1];
+            char* end = &work8[xe::countof(work8) - 1];
             char* start = end;
             start[0] = '\0';
 
@@ -471,9 +471,9 @@ int32_t format_core(PPCContext* ppc_context, FormatData& data, ArgList& args,
 
             auto s = format_double(value, precision, c, flags);
             auto length = (int32_t)s.size();
-            assert_true(length < xe::countof(work));
+            assert_true(length < xe::countof(work8));
 
-            auto start = &work[0];
+            auto start = &work8[0];
             auto end = &start[length];
 
             std::memcpy(start, s.c_str(), length);
@@ -637,7 +637,7 @@ int32_t format_core(PPCContext* ppc_context, FormatData& data, ArgList& args,
         }
       }
     } else {
-      // it's a const wchar_t*
+      // it's a const char16_t*
       auto b = (const uint16_t*)text.buffer;
       if (text.swap_wide) {
         while (remaining-- > 0) {
@@ -768,15 +768,15 @@ class WideStringFormatData : public FormatData {
   }
 
   bool put(uint16_t c) {
-    output_ << (wchar_t)c;
+    output_ << (char16_t)c;
     return true;
   }
 
-  std::wstring wstr() const { return output_.str(); }
+  std::u16string wstr() const { return output_.str(); }
 
  private:
   const uint16_t* input_;
-  std::wostringstream output_;
+  std::basic_stringstream<char16_t> output_;
 };
 
 class WideCountFormatData : public FormatData {
@@ -830,7 +830,7 @@ SHIM_CALL DbgPrint_shim(PPCContext* ppc_context, KernelState* kernel_state) {
     return;
   }
 
-  XELOGD("(DbgPrint) %s", data.str().c_str());
+  XELOGD("(DbgPrint) {}", data.str());
 
   SHIM_SET_RETURN_32(X_STATUS_SUCCESS);
 }
@@ -841,7 +841,7 @@ SHIM_CALL _snprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   int32_t buffer_count = SHIM_GET_ARG_32(1);
   uint32_t format_ptr = SHIM_GET_ARG_32(2);
 
-  XELOGD("_snprintf(%08X, %i, %08X, ...)", buffer_ptr, buffer_count,
+  XELOGD("_snprintf({:08X}, {}, {:08X}, ...)", buffer_ptr, buffer_count,
          format_ptr);
 
   if (buffer_ptr == 0 || buffer_count <= 0 || format_ptr == 0) {
@@ -877,7 +877,7 @@ SHIM_CALL sprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t buffer_ptr = SHIM_GET_ARG_32(0);
   uint32_t format_ptr = SHIM_GET_ARG_32(1);
 
-  XELOGD("sprintf(%08X, %08X, ...)", buffer_ptr, format_ptr);
+  XELOGD("sprintf({:08X}, {:08X}, ...)", buffer_ptr, format_ptr);
 
   if (buffer_ptr == 0 || format_ptr == 0) {
     SHIM_SET_RETURN_32(-1);
@@ -906,7 +906,7 @@ SHIM_CALL _snwprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   int32_t buffer_count = SHIM_GET_ARG_32(1);
   uint32_t format_ptr = SHIM_GET_ARG_32(2);
 
-  XELOGD("_snwprintf(%08X, %i, %08X, ...)", buffer_ptr, buffer_count,
+  XELOGD("_snwprintf({:08X}, {}, {:08X}, ...)", buffer_ptr, buffer_count,
          format_ptr);
 
   if (buffer_ptr == 0 || buffer_count <= 0 || format_ptr == 0) {
@@ -942,7 +942,7 @@ SHIM_CALL swprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t buffer_ptr = SHIM_GET_ARG_32(0);
   uint32_t format_ptr = SHIM_GET_ARG_32(1);
 
-  XELOGD("swprintf(%08X, %08X, ...)", buffer_ptr, format_ptr);
+  XELOGD("swprintf({:08X}, {:08X}, ...)", buffer_ptr, format_ptr);
 
   if (buffer_ptr == 0 || format_ptr == 0) {
     SHIM_SET_RETURN_32(-1);
@@ -972,7 +972,7 @@ SHIM_CALL _vsnprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t format_ptr = SHIM_GET_ARG_32(2);
   uint32_t arg_ptr = SHIM_GET_ARG_32(3);
 
-  XELOGD("_vsnprintf(%08X, %i, %08X, %08X)", buffer_ptr, buffer_count,
+  XELOGD("_vsnprintf({:08X}, {}, {:08X}, {:08X})", buffer_ptr, buffer_count,
          format_ptr, arg_ptr);
 
   if (buffer_ptr == 0 || buffer_count <= 0 || format_ptr == 0) {
@@ -1012,7 +1012,7 @@ SHIM_CALL _vsnwprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t format_ptr = SHIM_GET_ARG_32(2);
   uint32_t arg_ptr = SHIM_GET_ARG_32(3);
 
-  XELOGD("_vsnwprintf(%08X, %i, %08X, %08X)", buffer_ptr, buffer_count,
+  XELOGD("_vsnwprintf({:08X}, {}, {:08X}, {:08X})", buffer_ptr, buffer_count,
          format_ptr, arg_ptr);
 
   if (buffer_ptr == 0 || buffer_count <= 0 || format_ptr == 0) {
@@ -1051,7 +1051,7 @@ SHIM_CALL vsprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t format_ptr = SHIM_GET_ARG_32(1);
   uint32_t arg_ptr = SHIM_GET_ARG_32(2);
 
-  XELOGD("vsprintf(%08X, %08X, %08X)", buffer_ptr, format_ptr, arg_ptr);
+  XELOGD("vsprintf({:08X}, {:08X}, {:08X})", buffer_ptr, format_ptr, arg_ptr);
 
   if (buffer_ptr == 0 || format_ptr == 0) {
     SHIM_SET_RETURN_32(-1);
@@ -1079,7 +1079,7 @@ SHIM_CALL _vscwprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t format_ptr = SHIM_GET_ARG_32(0);
   uint32_t arg_ptr = SHIM_GET_ARG_32(1);
 
-  XELOGD("_vscwprintf(%08X, %08X)", format_ptr, arg_ptr);
+  XELOGD("_vscwprintf({:08X}, {:08X})", format_ptr, arg_ptr);
 
   if (format_ptr == 0) {
     SHIM_SET_RETURN_32(-1);
@@ -1102,7 +1102,7 @@ SHIM_CALL vswprintf_shim(PPCContext* ppc_context, KernelState* kernel_state) {
   uint32_t format_ptr = SHIM_GET_ARG_32(1);
   uint32_t arg_ptr = SHIM_GET_ARG_32(2);
 
-  XELOGD("vswprintf(%08X, %08X, %08X)", buffer_ptr, format_ptr, arg_ptr);
+  XELOGD("vswprintf({:08X}, {:08X}, {:08X})", buffer_ptr, format_ptr, arg_ptr);
 
   if (buffer_ptr == 0 || format_ptr == 0) {
     SHIM_SET_RETURN_32(-1);

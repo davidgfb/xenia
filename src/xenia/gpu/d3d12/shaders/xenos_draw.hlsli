@@ -3,38 +3,42 @@
 
 cbuffer xe_system_cbuffer : register(b0) {
   uint xe_flags;
+  float2 xe_tessellation_factor_range;
   uint xe_line_loop_closing_index;
-  uint xe_vertex_index_endian_and_edge_factors;
+
+  uint xe_vertex_index_endian;
   int xe_vertex_base_index;
+  float2 xe_point_size;
+
+  float2 xe_point_size_min_max;
+  float2 xe_point_screen_to_ndc;
 
   float4 xe_user_clip_planes[6];
 
   float3 xe_ndc_scale;
-  uint xe_pixel_pos_reg;
+  uint xe_interpolator_sampling_pattern;
 
   float3 xe_ndc_offset;
-  float xe_pixel_half_pixel_offset;
+  uint xe_ps_param_gen;
 
-  float2 xe_point_size;
-  float2 xe_point_size_min_max;
+  uint4 xe_texture_swizzled_signs[2];
 
-  float2 xe_point_screen_to_ndc;
   uint2 xe_sample_count_log2;
-
   float xe_alpha_test_reference;
-  uint xe_edram_resolution_square_scale;
-  uint xe_edram_pitch_tiles;
-  uint xe_edram_depth_base_dwords;
+  uint xe_alpha_to_mask;
 
   float4 xe_color_exp_bias;
 
   uint4 xe_color_output_map;
 
-  float2 xe_tessellation_factor_range;
+  uint xe_edram_resolution_square_scale;
+  uint xe_edram_pitch_tiles;
   float2 xe_edram_depth_range;
 
   float2 xe_edram_poly_offset_front;
   float2 xe_edram_poly_offset_back;
+
+  uint xe_edram_depth_base_dwords;
 
   uint4 xe_edram_stencil[2];
 
@@ -49,6 +53,14 @@ cbuffer xe_system_cbuffer : register(b0) {
   uint4 xe_edram_rt_blend_factors_ops;
 
   float4 xe_edram_blend_constant;
+};
+
+struct XeHSControlPointInput {
+  int index_or_edge_factor : XEVERTEXID;
+};
+
+struct XeHSControlPointOutput {
+  float index : XEVERTEXID;
 };
 
 struct XeVertexPostGS {
@@ -70,16 +82,5 @@ struct XeVertexPreGS {
   // have negative cull distance.
   float cull_distance : SV_CullDistance;
 };
-
-#define XeSysFlag_SharedMemoryIsUAV_Shift 0u
-#define XeSysFlag_SharedMemoryIsUAV (1u << XeSysFlag_SharedMemoryIsUAV_Shift)
-
-uint XeGetTessellationFactorAddress(uint control_point_id,
-                                    uint control_points_per_patch) {
-  // TODO(Triang3l): Verify whether the index offset is applied correctly.
-  control_point_id += asuint(xe_vertex_base_index) * control_points_per_patch;
-  return (xe_vertex_index_endian_and_edge_factors & 0x1FFFFFFCu) +
-         control_point_id * 4u;
-}
 
 #endif  // XENIA_GPU_D3D12_SHADERS_XENOS_DRAW_HLSLI_

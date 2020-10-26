@@ -129,7 +129,7 @@ dword_result_t ExCreateThread(lpdword_t handle_ptr, dword_t stack_size,
   X_STATUS result = thread->Create();
   if (XFAILED(result)) {
     // Failed!
-    XELOGE("Thread creation failed: %.8X", result);
+    XELOGE("Thread creation failed: {:08X}", result);
     return result;
   }
 
@@ -872,7 +872,7 @@ DECLARE_XBOXKRNL_EXPORT3(NtSignalAndWaitForSingleObjectEx, kThreading,
 
 uint32_t xeKeKfAcquireSpinLock(uint32_t* lock) {
   // XELOGD(
-  //     "KfAcquireSpinLock(%.8X)",
+  //     "KfAcquireSpinLock({:08X})",
   //     lock_ptr);
 
   // Lock.
@@ -970,12 +970,24 @@ void KfLowerIrql(dword_t old_value) {
 DECLARE_XBOXKRNL_EXPORT2(KfLowerIrql, kThreading, kImplemented, kHighFrequency);
 
 void NtQueueApcThread(dword_t thread_handle, lpvoid_t apc_routine,
-                      lpvoid_t arg1, lpvoid_t arg2, lpvoid_t arg3) {
-  // Alloc APC object (from somewhere) and insert.
+                      lpvoid_t apc_routine_context, lpvoid_t arg1,
+                      lpvoid_t arg2) {
+  auto thread =
+      kernel_state()->object_table()->LookupObject<XThread>(thread_handle);
 
-  assert_always("not implemented");
+  if (!thread) {
+    XELOGE("NtQueueApcThread: Incorrect thread handle! Might cause crash");
+    return;
+  }
+
+  if (!apc_routine) {
+    XELOGE("NtQueueApcThread: Incorrect apc routine! Might cause crash");
+    return;
+  }
+
+  thread->EnqueueApc(apc_routine, apc_routine_context, arg1, arg2);
 }
-// DECLARE_XBOXKRNL_EXPORT1(NtQueueApcThread, kThreading, kStub);
+DECLARE_XBOXKRNL_EXPORT1(NtQueueApcThread, kThreading, kImplemented);
 
 void KeInitializeApc(pointer_t<XAPC> apc, lpvoid_t thread_ptr,
                      lpvoid_t kernel_routine, lpvoid_t rundown_routine,

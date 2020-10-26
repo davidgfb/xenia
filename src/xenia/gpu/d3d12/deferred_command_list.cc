@@ -11,33 +11,35 @@
 
 #include "xenia/base/assert.h"
 #include "xenia/base/math.h"
+#include "xenia/base/profiling.h"
 #include "xenia/gpu/d3d12/d3d12_command_processor.h"
 
 namespace xe {
 namespace gpu {
 namespace d3d12 {
 
-constexpr size_t DeferredCommandList::kAlignment;
-
 DeferredCommandList::DeferredCommandList(
-    D3D12CommandProcessor* command_processor, size_t initial_size)
+    const D3D12CommandProcessor& command_processor, size_t initial_size)
     : command_processor_(command_processor) {
-  command_stream_.reserve(initial_size);
+  command_stream_.reserve(initial_size / sizeof(uintmax_t));
 }
 
 void DeferredCommandList::Reset() { command_stream_.clear(); }
 
 void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
                                   ID3D12GraphicsCommandList1* command_list_1) {
-  const uint8_t* stream = command_stream_.data();
+#if XE_UI_D3D12_FINE_GRAINED_DRAW_SCOPES
+  SCOPE_profile_cpu_f("gpu");
+#endif  // XE_UI_D3D12_FINE_GRAINED_DRAW_SCOPES
+  const uintmax_t* stream = command_stream_.data();
   size_t stream_remaining = command_stream_.size();
   ID3D12PipelineState* current_pipeline_state = nullptr;
   while (stream_remaining != 0) {
-    const uint32_t* header = reinterpret_cast<const uint32_t*>(stream);
-    const size_t header_size = xe::align(2 * sizeof(uint32_t), kAlignment);
-    stream += header_size;
-    stream_remaining -= header_size;
-    switch (Command(header[0])) {
+    const CommandHeader& header =
+        *reinterpret_cast<const CommandHeader*>(stream);
+    stream += kCommandHeaderSizeElements;
+    stream_remaining -= kCommandHeaderSizeElements;
+    switch (header.command) {
       case Command::kD3DClearUnorderedAccessViewUint: {
         auto& args =
             *reinterpret_cast<const ClearUnorderedAccessViewHeader*>(stream);
@@ -61,6 +63,12 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       case Command::kCopyTexture: {
         auto& args = *reinterpret_cast<const CopyTextureArguments*>(stream);
         command_list->CopyTextureRegion(&args.dst, 0, 0, 0, &args.src, nullptr);
+      } break;
+      case Command::kCopyTextureRegion: {
+        auto& args =
+            *reinterpret_cast<const CopyTextureRegionArguments*>(stream);
+        command_list->CopyTextureRegion(&args.dst, args.dst_x, args.dst_y,
+                                        args.dst_z, &args.src, &args.src_box);
       } break;
       case Command::kD3DDispatch: {
         if (current_pipeline_state != nullptr) {
@@ -114,10 +122,11 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         command_list->OMSetStencilRef(*reinterpret_cast<const UINT*>(stream));
       } break;
       case Command::kD3DResourceBarrier: {
+        static_assert(alignof(D3D12_RESOURCE_BARRIER) <= alignof(uintmax_t));
         command_list->ResourceBarrier(
             *reinterpret_cast<const UINT*>(stream),
             reinterpret_cast<const D3D12_RESOURCE_BARRIER*>(
-                stream +
+                reinterpret_cast<const uint8_t*>(stream) +
                 xe::align(sizeof(UINT), alignof(D3D12_RESOURCE_BARRIER))));
       } break;
       case Command::kRSSetScissorRect: {
@@ -201,7 +210,7 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
       } break;
       case Command::kSetPipelineStateHandle: {
         current_pipeline_state =
-            command_processor_->GetD3D12PipelineStateByHandle(
+            command_processor_.GetD3D12PipelineStateByHandle(
                 *reinterpret_cast<void* const*>(stream));
         if (current_pipeline_state) {
           command_list->SetPipelineState(current_pipeline_state);
@@ -217,25 +226,26 @@ void DeferredCommandList::Execute(ID3D12GraphicsCommandList* command_list,
         }
       } break;
       default:
-        assert_unhandled_case(Command(header[0]));
+        assert_unhandled_case(header.command);
         break;
     }
-    stream += header[1];
-    stream_remaining -= header[1];
+    stream += header.arguments_size_elements;
+    stream_remaining -= header.arguments_size_elements;
   }
 }
 
 void* DeferredCommandList::WriteCommand(Command command,
-                                        size_t arguments_size) {
-  arguments_size = xe::align(arguments_size, kAlignment);
-  const size_t header_size = xe::align(2 * sizeof(uint32_t), kAlignment);
+                                        size_t arguments_size_bytes) {
+  size_t arguments_size_elements =
+      (arguments_size_bytes + sizeof(uintmax_t) - 1) / sizeof(uintmax_t);
   size_t offset = command_stream_.size();
-  command_stream_.resize(offset + header_size + arguments_size);
-  uint32_t* header =
-      reinterpret_cast<uint32_t*>(command_stream_.data() + offset);
-  header[0] = uint32_t(command);
-  header[1] = uint32_t(arguments_size);
-  return command_stream_.data() + (offset + header_size);
+  command_stream_.resize(offset + kCommandHeaderSizeElements +
+                         arguments_size_elements);
+  CommandHeader& header =
+      *reinterpret_cast<CommandHeader*>(command_stream_.data() + offset);
+  header.command = command;
+  header.arguments_size_elements = uint32_t(arguments_size_elements);
+  return command_stream_.data() + (offset + kCommandHeaderSizeElements);
 }
 
 }  // namespace d3d12

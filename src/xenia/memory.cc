@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -13,6 +13,7 @@
 #include <cstring>
 #include <utility>
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/byte_stream.h"
 #include "xenia/base/clock.h"
@@ -124,8 +125,8 @@ Memory::~Memory() {
 }
 
 bool Memory::Initialize() {
-  file_name_ = std::wstring(L"Local\\xenia_memory_") +
-               std::to_wstring(Clock::QueryHostTickCount());
+  file_name_ =
+      fmt::format("Local\\xenia_memory_{}", Clock::QueryHostTickCount());
 
   // Create main page file-backed mapping. This is all reserved but
   // uncommitted (so it shouldn't expand page file).
@@ -552,12 +553,11 @@ void Memory::DumpMap() {
   XELOGE("==================================================================");
   XELOGE("Memory Dump");
   XELOGE("==================================================================");
-  XELOGE("               System Page Size: %d (%.8X)", system_page_size_,
-         system_page_size_);
-  XELOGE("  System Allocation Granularity: %d (%.8X)",
-         system_allocation_granularity_, system_allocation_granularity_);
-  XELOGE("                Virtual Membase: %.16llX", virtual_membase_);
-  XELOGE("               Physical Membase: %.16llX", physical_membase_);
+  XELOGE("               System Page Size: {0} ({0:08X})", system_page_size_);
+  XELOGE("  System Allocation Granularity: {0} ({0:08X})",
+         system_allocation_granularity_);
+  XELOGE("                Virtual Membase: {}", virtual_membase_);
+  XELOGE("               Physical Membase: {}", physical_membase_);
   XELOGE("");
   XELOGE("------------------------------------------------------------------");
   XELOGE("Virtual Heaps");
@@ -662,14 +662,13 @@ void BaseHeap::Dispose() {
 void BaseHeap::DumpMap() {
   auto global_lock = global_critical_region_.Acquire();
   XELOGE("------------------------------------------------------------------");
-  XELOGE("Heap: %.8X-%.8X", heap_base_, heap_base_ + (heap_size_ - 1));
+  XELOGE("Heap: {:08X}-{:08X}", heap_base_, heap_base_ + (heap_size_ - 1));
   XELOGE("------------------------------------------------------------------");
-  XELOGE("            Heap Base: %.8X", heap_base_);
-  XELOGE("            Heap Size: %d (%.8X)", heap_size_, heap_size_);
-  XELOGE("            Page Size: %d (%.8X)", page_size_, page_size_);
-  XELOGE("           Page Count: %lld", page_table_.size());
-  XELOGE("  Host Address Offset: %d (%.8X)", host_address_offset_,
-         host_address_offset_);
+  XELOGE("            Heap Base: {:08X}", heap_base_);
+  XELOGE("            Heap Size: {0} ({0:08X})", heap_size_);
+  XELOGE("            Page Size: {0} ({0:08X})", page_size_);
+  XELOGE("           Page Count: {}", page_table_.size());
+  XELOGE("  Host Address Offset: {0} ({0:08X})", host_address_offset_);
   bool is_empty_span = false;
   uint32_t empty_span_start = 0;
   for (uint32_t i = 0; i < uint32_t(page_table_.size()); ++i) {
@@ -682,7 +681,7 @@ void BaseHeap::DumpMap() {
       continue;
     }
     if (is_empty_span) {
-      XELOGE("  %.8X-%.8X %6dp %10db unreserved",
+      XELOGE("  {:08X}-{:08X} {:6d}p {:10d}b unreserved",
              heap_base_ + empty_span_start * page_size_,
              heap_base_ + i * page_size_, i - empty_span_start,
              (i - empty_span_start) * page_size_);
@@ -696,14 +695,15 @@ void BaseHeap::DumpMap() {
     }
     char access_r = (page.current_protect & kMemoryProtectRead) ? 'R' : ' ';
     char access_w = (page.current_protect & kMemoryProtectWrite) ? 'W' : ' ';
-    XELOGE("  %.8X-%.8X %6dp %10db %s %c%c", heap_base_ + i * page_size_,
+    XELOGE("  {:08X}-{:08X} {:6d}p {:10d}b {} {}{}",
+           heap_base_ + i * page_size_,
            heap_base_ + (i + page.region_page_count) * page_size_,
            page.region_page_count, page.region_page_count * page_size_,
            state_name, access_r, access_w);
     i += page.region_page_count - 1;
   }
   if (is_empty_span) {
-    XELOGE("  %.8X-%.8X - %d unreserved pages)",
+    XELOGE("  {:08X}-{:08X} - {} unreserved pages)",
            heap_base_ + empty_span_start * page_size_,
            heap_base_ + (heap_size_ - 1),
            page_table_.size() - empty_span_start);
@@ -740,7 +740,7 @@ uint32_t BaseHeap::GetUnreservedPageCount() {
 }
 
 bool BaseHeap::Save(ByteStream* stream) {
-  XELOGD("Heap %.8X-%.8X", heap_base_, heap_base_ + (heap_size_ - 1));
+  XELOGD("Heap {:08X}-{:08X}", heap_base_, heap_base_ + (heap_size_ - 1));
 
   for (size_t i = 0; i < page_table_.size(); i++) {
     auto& page = page_table_[i];
@@ -768,7 +768,7 @@ bool BaseHeap::Save(ByteStream* stream) {
 }
 
 bool BaseHeap::Restore(ByteStream* stream) {
-  XELOGD("Heap %.8X-%.8X", heap_base_, heap_base_ + (heap_size_ - 1));
+  XELOGD("Heap {:08X}-{:08X}", heap_base_, heap_base_ + (heap_size_ - 1));
 
   for (size_t i = 0; i < page_table_.size(); i++) {
     auto& page = page_table_[i];
@@ -1145,12 +1145,38 @@ bool BaseHeap::Release(uint32_t base_address, uint32_t* out_region_size) {
 
 bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
                        uint32_t* old_protect) {
-  uint32_t page_count = xe::round_up(size, page_size_) / page_size_;
+  if (!size) {
+    XELOGE("BaseHeap::Protect failed due to zero size");
+    return false;
+  }
+
+  // From the VirtualProtect MSDN page:
+  //
+  // "The region of affected pages includes all pages containing one or more
+  //  bytes in the range from the lpAddress parameter to (lpAddress+dwSize).
+  //  This means that a 2-byte range straddling a page boundary causes the
+  //  protection attributes of both pages to be changed."
+  //
+  // "The access protection value can be set only on committed pages. If the
+  //  state of any page in the specified region is not committed, the function
+  //  fails and returns without modifying the access protection of any pages in
+  //  the specified region."
+
   uint32_t start_page_number = (address - heap_base_) / page_size_;
-  uint32_t end_page_number = start_page_number + page_count - 1;
-  start_page_number =
-      std::min(uint32_t(page_table_.size()) - 1, start_page_number);
-  end_page_number = std::min(uint32_t(page_table_.size()) - 1, end_page_number);
+  if (start_page_number >= page_table_.size()) {
+    XELOGE("BaseHeap::Protect failed due to out-of-bounds base address {:08X}",
+           address);
+    return false;
+  }
+  uint32_t end_page_number =
+      uint32_t((uint64_t(address) + size - 1 - heap_base_) / page_size_);
+  if (end_page_number >= page_table_.size()) {
+    XELOGE(
+        "BaseHeap::Protect failed due to out-of-bounds range ({:08X} bytes "
+        "from {:08x})",
+        size, address);
+    return false;
+  }
 
   auto global_lock = global_critical_region_.Acquire();
 
@@ -1173,6 +1199,7 @@ bool BaseHeap::Protect(uint32_t address, uint32_t size, uint32_t protect,
 
   // Attempt host change (hopefully won't fail).
   // We can only do this if our size matches system page granularity.
+  uint32_t page_count = end_page_number - start_page_number + 1;
   if (page_size_ == xe::memory::page_size() ||
       (((page_count * page_size_) % xe::memory::page_size() == 0) &&
        ((start_page_number * page_size_) % xe::memory::page_size() == 0))) {

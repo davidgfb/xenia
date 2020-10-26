@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2016 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -38,7 +38,8 @@ VulkanCommandProcessor::VulkanCommandProcessor(
 
 VulkanCommandProcessor::~VulkanCommandProcessor() = default;
 
-void VulkanCommandProcessor::RequestFrameTrace(const std::wstring& root_path) {
+void VulkanCommandProcessor::RequestFrameTrace(
+    const std::filesystem::path& root_path) {
   // Override traces if renderdoc is attached.
   if (device_->is_renderdoc_attached()) {
     trace_requested_ = true;
@@ -51,7 +52,7 @@ void VulkanCommandProcessor::RequestFrameTrace(const std::wstring& root_path) {
 void VulkanCommandProcessor::TracePlaybackWroteMemory(uint32_t base_ptr,
                                                       uint32_t length) {}
 
-void VulkanCommandProcessor::RestoreEDRAMSnapshot(const void* snapshot) {}
+void VulkanCommandProcessor::RestoreEdramSnapshot(const void* snapshot) {}
 
 void VulkanCommandProcessor::ClearCaches() {
   CommandProcessor::ClearCaches();
@@ -588,7 +589,7 @@ void VulkanCommandProcessor::PerformSwap(uint32_t frontbuffer_ptr,
   current_batch_fence_ = nullptr;
 }
 
-Shader* VulkanCommandProcessor::LoadShader(ShaderType shader_type,
+Shader* VulkanCommandProcessor::LoadShader(xenos::ShaderType shader_type,
                                            uint32_t guest_address,
                                            const uint32_t* host_address,
                                            uint32_t dword_count) {
@@ -596,7 +597,7 @@ Shader* VulkanCommandProcessor::LoadShader(ShaderType shader_type,
                                      dword_count);
 }
 
-bool VulkanCommandProcessor::IssueDraw(PrimitiveType primitive_type,
+bool VulkanCommandProcessor::IssueDraw(xenos::PrimitiveType primitive_type,
                                        uint32_t index_count,
                                        IndexBufferInfo* index_buffer_info,
                                        bool major_mode_explicit) {
@@ -782,16 +783,17 @@ bool VulkanCommandProcessor::PopulateIndexBuffer(
   assert_true(min_index == 0);
   assert_true(max_index == 0xFFFF || max_index == 0xFFFFFF);
 
-  assert_true(info.endianness == Endian::k8in16 ||
-              info.endianness == Endian::k8in32);
+  assert_true(info.endianness == xenos::Endian::k8in16 ||
+              info.endianness == xenos::Endian::k8in32);
 
   trace_writer_.WriteMemoryRead(info.guest_base, info.length);
 
   // Upload (or get a cached copy of) the buffer.
   uint32_t source_addr = info.guest_base;
   uint32_t source_length =
-      info.count * (info.format == IndexFormat::kInt32 ? sizeof(uint32_t)
-                                                       : sizeof(uint16_t));
+      info.count * (info.format == xenos::IndexFormat::kInt32
+                        ? sizeof(uint32_t)
+                        : sizeof(uint16_t));
   auto buffer_ref = buffer_cache_->UploadIndexBuffer(
       current_setup_buffer_, source_addr, source_length, info.format,
       current_batch_fence_);
@@ -801,7 +803,7 @@ bool VulkanCommandProcessor::PopulateIndexBuffer(
   }
 
   // Bind the buffer.
-  VkIndexType index_type = info.format == IndexFormat::kInt32
+  VkIndexType index_type = info.format == xenos::IndexFormat::kInt32
                                ? VK_INDEX_TYPE_UINT32
                                : VK_INDEX_TYPE_UINT16;
   vkCmdBindIndexBuffer(command_buffer, buffer_ref.first, buffer_ref.second,
@@ -925,7 +927,8 @@ bool VulkanCommandProcessor::IssueCopy() {
   // https://fossies.org/dox/MesaLib-10.3.5/fd2__gmem_8c_source.html
   uint32_t surface_info = regs[XE_GPU_REG_RB_SURFACE_INFO].u32;
   uint32_t surface_pitch = surface_info & 0x3FFF;
-  auto surface_msaa = static_cast<MsaaSamples>((surface_info >> 16) & 0x3);
+  auto surface_msaa =
+      static_cast<xenos::MsaaSamples>((surface_info >> 16) & 0x3);
 
   // TODO(benvanik): any way to scissor this? a200 has:
   // REG_A2XX_RB_COPY_DEST_OFFSET = A2XX_RB_COPY_DEST_OFFSET_X(tile->xoff) |
@@ -968,7 +971,7 @@ bool VulkanCommandProcessor::IssueCopy() {
       break;
   }
   assert_true(fetch->type == xenos::FetchConstantType::kVertex);
-  assert_true(fetch->endian == Endian::k8in32);
+  assert_true(fetch->endian == xenos::Endian::k8in32);
   assert_true(fetch->size == 6);
   const uint8_t* vertex_addr = memory_->TranslatePhysical(fetch->address << 2);
   trace_writer_.WriteMemoryRead(fetch->address << 2, fetch->size * 4);
@@ -1001,8 +1004,8 @@ bool VulkanCommandProcessor::IssueCopy() {
 
   uint32_t color_edram_base = 0;
   uint32_t depth_edram_base = 0;
-  ColorRenderTargetFormat color_format;
-  DepthRenderTargetFormat depth_format;
+  xenos::ColorRenderTargetFormat color_format;
+  xenos::DepthRenderTargetFormat depth_format;
   if (is_color_source) {
     // Source from a color target.
     reg::RB_COLOR_INFO color_info[4] = {
@@ -1026,10 +1029,10 @@ bool VulkanCommandProcessor::IssueCopy() {
     }
   }
 
-  Endian resolve_endian = Endian::k8in32;
-  if (copy_regs->copy_dest_info.copy_dest_endian <= Endian128::k16in32) {
+  xenos::Endian resolve_endian = xenos::Endian::k8in32;
+  if (copy_regs->copy_dest_info.copy_dest_endian <= xenos::Endian128::k16in32) {
     resolve_endian =
-        static_cast<Endian>(copy_regs->copy_dest_info.copy_dest_endian);
+        static_cast<xenos::Endian>(copy_regs->copy_dest_info.copy_dest_endian);
   }
 
   // Demand a resolve texture from the texture cache.
@@ -1120,9 +1123,9 @@ bool VulkanCommandProcessor::IssueCopy() {
                                         : static_cast<uint32_t>(depth_format);
   VkFilter filter = is_color_source ? VK_FILTER_LINEAR : VK_FILTER_NEAREST;
 
-  XELOGGPU("Resolve RT %.8X %.8X(%d) -> 0x%.8X (%dx%d, format: %s)", edram_base,
-           surface_pitch, surface_pitch, copy_dest_base, copy_dest_pitch,
-           copy_dest_height, texture_info.format_info()->name);
+  XELOGGPU("Resolve RT {:08X} {:08X}({}) -> 0x{:08X} ({}x{}, format: {})",
+           edram_base, surface_pitch, surface_pitch, copy_dest_base,
+           copy_dest_pitch, copy_dest_height, texture_info.format_info()->name);
   switch (copy_command) {
     case CopyCommand::kRaw:
       /*
@@ -1329,8 +1332,6 @@ bool VulkanCommandProcessor::IssueCopy() {
 }
 
 void VulkanCommandProcessor::InitializeTrace() {}
-
-void VulkanCommandProcessor::FinalizeTrace() {}
 
 }  // namespace vulkan
 }  // namespace gpu

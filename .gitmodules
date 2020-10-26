@@ -49,6 +49,18 @@
 [submodule "third_party/cxxopts"]
 	path = third_party/cxxopts
 	url = https://github.com/jarro2783/cxxopts.git
-[submodule "third_party/SDL2-devel-VC"]
-	path = third_party/SDL2-devel-VC
-	url = https://github.com/xenia-project/SDL2-devel-VC.git
+[submodule "third_party/SDL2"]
+	path = third_party/SDL2
+	url = https://github.com/spurious/SDL-mirror.git
+[submodule "third_party/utfcpp"]
+	path = third_party/utfcpp
+	url = https://github.com/xenia-project/utfcpp.git
+[submodule "third_party/fmt"]
+	path = third_party/fmt
+	url = https://github.com/fmtlib/fmt.git
+[submodule "third_party/disruptorplus"]
+	path = third_party/disruptorplus
+	url = https://github.com/xenia-project/disruptorplus.git
+[submodule "third_party/DirectXShaderCompiler"]
+	path = third_party/DirectXShaderCompiler
+	url = https://github.com/microsoft/DirectXShaderCompiler.git

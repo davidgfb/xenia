@@ -2,13 +2,14 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2016 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
 
 #include "xenia/gpu/vulkan/vulkan_shader.h"
 
+#include "third_party/fmt/include/fmt/format.h"
 #include "xenia/base/assert.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/math.h"
@@ -22,7 +23,7 @@ namespace vulkan {
 using xe::ui::vulkan::CheckResult;
 
 VulkanShader::VulkanShader(ui::vulkan::VulkanDevice* device,
-                           ShaderType shader_type, uint64_t data_hash,
+                           xenos::ShaderType shader_type, uint64_t data_hash,
                            const uint32_t* dword_ptr, uint32_t dword_count)
     : Shader(shader_type, data_hash, dword_ptr, dword_count), device_(device) {}
 
@@ -49,12 +50,12 @@ bool VulkanShader::Prepare() {
       vkCreateShaderModule(*device_, &shader_info, nullptr, &shader_module_);
   CheckResult(status, "vkCreateShaderModule");
 
-  char typeChar = shader_type_ == ShaderType::kPixel
+  char typeChar = shader_type_ == xenos::ShaderType::kPixel
                       ? 'p'
-                      : shader_type_ == ShaderType::kVertex ? 'v' : 'u';
+                      : shader_type_ == xenos::ShaderType::kVertex ? 'v' : 'u';
   device_->DbgSetObjectName(
       uint64_t(shader_module_), VK_DEBUG_REPORT_OBJECT_TYPE_SHADER_MODULE_EXT,
-      xe::format_string("S(%c): %.16llX", typeChar, ucode_data_hash()));
+      fmt::format("S({}): {:016X}", typeChar, ucode_data_hash()));
   return status == VK_SUCCESS;
 }
 

@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2015 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -11,7 +11,6 @@
 
 #include "third_party/imgui/imgui.h"
 #include "xenia/base/assert.h"
-#include "xenia/base/filesystem.h"
 #include "xenia/base/logging.h"
 #include "xenia/ui/window.h"
 
@@ -42,6 +41,7 @@ void ImGuiDrawer::Initialize() {
   // Setup ImGui internal state.
   // This will give us state we can swap to the ImGui globals when in use.
   internal_state_ = ImGui::CreateContext();
+  ImGui::SetCurrentContext(internal_state_);
 
   auto& io = ImGui::GetIO();
 
@@ -57,11 +57,12 @@ void ImGuiDrawer::Initialize() {
   auto& style = ImGui::GetStyle();
   style.ScrollbarRounding = 0;
   style.WindowRounding = 0;
+  style.TabRounding = 0;
   style.Colors[ImGuiCol_Text] = ImVec4(0.89f, 0.90f, 0.90f, 1.00f);
   style.Colors[ImGuiCol_TextDisabled] = ImVec4(0.60f, 0.60f, 0.60f, 1.00f);
   style.Colors[ImGuiCol_WindowBg] = ImVec4(0.00f, 0.06f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_ChildBg] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
-  style.Colors[ImGuiCol_Border] = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+  style.Colors[ImGuiCol_Border] = ImVec4(0.00f, 0.35f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_BorderShadow] = ImVec4(0.00f, 0.00f, 0.00f, 0.00f);
   style.Colors[ImGuiCol_FrameBg] = ImVec4(0.80f, 0.80f, 0.80f, 0.30f);
   style.Colors[ImGuiCol_FrameBgHovered] = ImVec4(0.90f, 0.80f, 0.80f, 0.40f);
@@ -86,12 +87,18 @@ void ImGuiDrawer::Initialize() {
   style.Colors[ImGuiCol_Header] = ImVec4(0.00f, 0.40f, 0.00f, 0.71f);
   style.Colors[ImGuiCol_HeaderHovered] = ImVec4(0.00f, 0.60f, 0.26f, 0.80f);
   style.Colors[ImGuiCol_HeaderActive] = ImVec4(0.00f, 0.75f, 0.00f, 0.80f);
-  style.Colors[ImGuiCol_Separator] = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
+  style.Colors[ImGuiCol_Separator] = ImVec4(0.00f, 0.35f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_SeparatorHovered] = ImVec4(0.36f, 0.89f, 0.38f, 1.00f);
   style.Colors[ImGuiCol_SeparatorActive] = ImVec4(0.13f, 0.50f, 0.11f, 1.00f);
   style.Colors[ImGuiCol_ResizeGrip] = ImVec4(1.00f, 1.00f, 1.00f, 0.30f);
   style.Colors[ImGuiCol_ResizeGripHovered] = ImVec4(1.00f, 1.00f, 1.00f, 0.60f);
   style.Colors[ImGuiCol_ResizeGripActive] = ImVec4(1.00f, 1.00f, 1.00f, 0.90f);
+  style.Colors[ImGuiCol_Tab] = style.Colors[ImGuiCol_Button];
+  style.Colors[ImGuiCol_TabHovered] = style.Colors[ImGuiCol_ButtonHovered];
+  style.Colors[ImGuiCol_TabActive] = style.Colors[ImGuiCol_ButtonActive];
+  style.Colors[ImGuiCol_TabUnfocused] = style.Colors[ImGuiCol_FrameBg];
+  style.Colors[ImGuiCol_TabUnfocusedActive] =
+      style.Colors[ImGuiCol_FrameBgHovered];
   style.Colors[ImGuiCol_PlotLines] = ImVec4(1.00f, 1.00f, 1.00f, 1.00f);
   style.Colors[ImGuiCol_PlotLinesHovered] = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
   style.Colors[ImGuiCol_PlotHistogram] = ImVec4(0.90f, 0.70f, 0.00f, 1.00f);
@@ -136,7 +143,7 @@ void ImGuiDrawer::SetupFont() {
   // TODO(benvanik): jp font on other platforms?
   // https://github.com/Koruri/kibitaki looks really good, but is 1.5MiB.
   const char* jp_font_path = "C:\\Windows\\Fonts\\msgothic.ttc";
-  if (xe::filesystem::PathExists(xe::to_wstring(jp_font_path))) {
+  if (std::filesystem::exists(jp_font_path)) {
     ImFontConfig jp_font_config;
     jp_font_config.MergeMode = true;
     jp_font_config.OversampleH = jp_font_config.OversampleV = 1;
@@ -156,7 +163,7 @@ void ImGuiDrawer::SetupFont() {
       width, height, ImmediateTextureFilter::kLinear, true,
       reinterpret_cast<uint8_t*>(pixels));
 
-  io.Fonts->TexID = reinterpret_cast<void*>(font_texture_->handle);
+  io.Fonts->TexID = reinterpret_cast<ImTextureID>(font_texture_.get());
 }
 
 void ImGuiDrawer::RenderDrawLists(ImDrawData* data) {
@@ -191,11 +198,7 @@ void ImGuiDrawer::RenderDrawLists(ImDrawData* data) {
       draw.primitive_type = ImmediatePrimitiveType::kTriangles;
       draw.count = cmd.ElemCount;
       draw.index_offset = index_offset;
-      draw.texture_handle =
-          reinterpret_cast<uintptr_t>(cmd.TextureId) & ~kIgnoreAlpha;
-      draw.alpha_blend =
-          reinterpret_cast<uintptr_t>(cmd.TextureId) & kIgnoreAlpha ? false
-                                                                    : true;
+      draw.texture = reinterpret_cast<ImmediateTexture*>(cmd.TextureId);
       draw.scissor = true;
       draw.scissor_rect[0] = static_cast<int>(cmd.ClipRect.x);
       draw.scissor_rect[1] = static_cast<int>(height - cmd.ClipRect.w);
@@ -262,16 +265,27 @@ void ImGuiDrawer::OnKeyChar(KeyEvent* e) {
 void ImGuiDrawer::OnMouseDown(MouseEvent* e) {
   auto& io = GetIO();
   io.MousePos = ImVec2(float(e->x()), float(e->y()));
+  int button = -1;
   switch (e->button()) {
     case xe::ui::MouseEvent::Button::kLeft: {
-      io.MouseDown[0] = true;
-    } break;
+      button = 0;
+      break;
+    }
     case xe::ui::MouseEvent::Button::kRight: {
-      io.MouseDown[1] = true;
-    } break;
+      button = 1;
+      break;
+    }
     default: {
       // Ignored.
-    } break;
+      break;
+    }
+  }
+
+  if (button >= 0 && button < std::size(io.MouseDown)) {
+    if (!ImGui::IsAnyMouseDown()) {
+      window_->CaptureMouse();
+    }
+    io.MouseDown[button] = true;
   }
 }
 
@@ -283,16 +297,27 @@ void ImGuiDrawer::OnMouseMove(MouseEvent* e) {
 void ImGuiDrawer::OnMouseUp(MouseEvent* e) {
   auto& io = GetIO();
   io.MousePos = ImVec2(float(e->x()), float(e->y()));
+  int button = -1;
   switch (e->button()) {
     case xe::ui::MouseEvent::Button::kLeft: {
-      io.MouseDown[0] = false;
-    } break;
+      button = 0;
+      break;
+    }
     case xe::ui::MouseEvent::Button::kRight: {
-      io.MouseDown[1] = false;
-    } break;
+      button = 1;
+      break;
+    }
     default: {
       // Ignored.
-    } break;
+      break;
+    }
+  }
+
+  if (button >= 0 && button < std::size(io.MouseDown)) {
+    io.MouseDown[button] = false;
+    if (!ImGui::IsAnyMouseDown()) {
+      window_->ReleaseMouse();
+    }
   }
 }
 

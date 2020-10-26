@@ -15,6 +15,8 @@
 #include "xenia/ui/d3d12/d3d12_api.h"
 #include "xenia/ui/graphics_provider.h"
 
+#define XE_UI_D3D12_FINE_GRAINED_DRAW_SCOPES 1
+
 namespace xe {
 namespace ui {
 namespace d3d12 {
@@ -68,13 +70,22 @@ class D3D12Provider : public GraphicsProvider {
   uint32_t GetAdapterVendorID() const { return adapter_vendor_id_; }
 
   // Device features.
-  uint32_t GetProgrammableSamplePositionsTier() const {
+  D3D12_HEAP_FLAGS GetHeapFlagCreateNotZeroed() const {
+    return heap_flag_create_not_zeroed_;
+  }
+  D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER
+  GetProgrammableSamplePositionsTier() const {
     return programmable_sample_positions_tier_;
   }
   bool AreRasterizerOrderedViewsSupported() const {
     return rasterizer_ordered_views_supported_;
   }
-  uint32_t GetTiledResourcesTier() const { return tiled_resources_tier_; }
+  D3D12_RESOURCE_BINDING_TIER GetResourceBindingTier() const {
+    return resource_binding_tier_;
+  }
+  D3D12_TILED_RESOURCES_TIER GetTiledResourcesTier() const {
+    return tiled_resources_tier_;
+  }
   uint32_t GetVirtualAddressBitsPerResource() const {
     return virtual_address_bits_per_resource_;
   }
@@ -90,30 +101,56 @@ class D3D12Provider : public GraphicsProvider {
   inline HRESULT Disassemble(const void* src_data, size_t src_data_size,
                              UINT flags, const char* comments,
                              ID3DBlob** disassembly_out) const {
+    if (!pfn_d3d_disassemble_) {
+      return E_NOINTERFACE;
+    }
     return pfn_d3d_disassemble_(src_data, src_data_size, flags, comments,
                                 disassembly_out);
+  }
+  inline HRESULT DxbcConverterCreateInstance(const CLSID& rclsid,
+                                             const IID& riid,
+                                             void** ppv) const {
+    if (!pfn_dxilconv_dxc_create_instance_) {
+      return E_NOINTERFACE;
+    }
+    return pfn_dxilconv_dxc_create_instance_(rclsid, riid, ppv);
+  }
+  inline HRESULT DxcCreateInstance(const CLSID& rclsid, const IID& riid,
+                                   void** ppv) const {
+    if (!pfn_dxcompiler_dxc_create_instance_) {
+      return E_NOINTERFACE;
+    }
+    return pfn_dxcompiler_dxc_create_instance_(rclsid, riid, ppv);
   }
 
  private:
   explicit D3D12Provider(Window* main_window);
 
+  static bool EnableIncreaseBasePriorityPrivilege();
   bool Initialize();
-
-  HMODULE library_dxgi_ = nullptr;
-  HMODULE library_d3d12_ = nullptr;
-  HMODULE library_d3dcompiler_ = nullptr;
 
   typedef HRESULT(WINAPI* PFNCreateDXGIFactory2)(UINT Flags, REFIID riid,
                                                  _COM_Outptr_ void** ppFactory);
   typedef HRESULT(WINAPI* PFNDXGIGetDebugInterface1)(
       UINT Flags, REFIID riid, _COM_Outptr_ void** pDebug);
 
+  HMODULE library_dxgi_ = nullptr;
   PFNCreateDXGIFactory2 pfn_create_dxgi_factory2_;
   PFNDXGIGetDebugInterface1 pfn_dxgi_get_debug_interface1_;
+
+  HMODULE library_d3d12_ = nullptr;
   PFN_D3D12_GET_DEBUG_INTERFACE pfn_d3d12_get_debug_interface_;
   PFN_D3D12_CREATE_DEVICE pfn_d3d12_create_device_;
   PFN_D3D12_SERIALIZE_ROOT_SIGNATURE pfn_d3d12_serialize_root_signature_;
-  pD3DDisassemble pfn_d3d_disassemble_;
+
+  HMODULE library_d3dcompiler_ = nullptr;
+  pD3DDisassemble pfn_d3d_disassemble_ = nullptr;
+
+  HMODULE library_dxilconv_ = nullptr;
+  DxcCreateInstanceProc pfn_dxilconv_dxc_create_instance_ = nullptr;
+
+  HMODULE library_dxcompiler_ = nullptr;
+  DxcCreateInstanceProc pfn_dxcompiler_dxc_create_instance_ = nullptr;
 
   IDXGIFactory2* dxgi_factory_ = nullptr;
   IDXGraphicsAnalysis* graphics_analysis_ = nullptr;
@@ -127,9 +164,11 @@ class D3D12Provider : public GraphicsProvider {
 
   uint32_t adapter_vendor_id_;
 
-  uint32_t programmable_sample_positions_tier_;
+  D3D12_HEAP_FLAGS heap_flag_create_not_zeroed_;
+  D3D12_PROGRAMMABLE_SAMPLE_POSITIONS_TIER programmable_sample_positions_tier_;
   bool rasterizer_ordered_views_supported_;
-  uint32_t tiled_resources_tier_;
+  D3D12_RESOURCE_BINDING_TIER resource_binding_tier_;
+  D3D12_TILED_RESOURCES_TIER tiled_resources_tier_;
   uint32_t virtual_address_bits_per_resource_;
 };
 

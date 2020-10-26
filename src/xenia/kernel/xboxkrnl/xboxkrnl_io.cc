@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2013 Ben Vanik. All rights reserved.                             *
+ * Copyright 2020 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -11,6 +11,7 @@
 #include "xenia/base/memory.h"
 #include "xenia/base/mutex.h"
 #include "xenia/cpu/processor.h"
+#include "xenia/kernel/info/file.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/util/shim_utils.h"
 #include "xenia/kernel/xboxkrnl/xboxkrnl_private.h"
@@ -26,37 +27,6 @@ namespace xe {
 namespace kernel {
 namespace xboxkrnl {
 
-// https://msdn.microsoft.com/en-us/library/windows/hardware/ff540287.aspx
-struct X_FILE_FS_VOLUME_INFORMATION {
-  // FILE_FS_VOLUME_INFORMATION
-  xe::be<uint64_t> creation_time;
-  xe::be<uint32_t> serial_number;
-  xe::be<uint32_t> label_length;
-  xe::be<uint32_t> supports_objects;
-  char label[1];
-};
-static_assert_size(X_FILE_FS_VOLUME_INFORMATION, 24);
-
-// https://msdn.microsoft.com/en-us/library/windows/hardware/ff540282.aspx
-struct X_FILE_FS_SIZE_INFORMATION {
-  // FILE_FS_SIZE_INFORMATION
-  xe::be<uint64_t> total_allocation_units;
-  xe::be<uint64_t> available_allocation_units;
-  xe::be<uint32_t> sectors_per_allocation_unit;
-  xe::be<uint32_t> bytes_per_sector;
-};
-static_assert_size(X_FILE_FS_SIZE_INFORMATION, 24);
-
-// https://msdn.microsoft.com/en-us/library/windows/hardware/ff540251(v=vs.85).aspx
-struct X_FILE_FS_ATTRIBUTE_INFORMATION {
-  // FILE_FS_ATTRIBUTE_INFORMATION
-  xe::be<uint32_t> attributes;
-  xe::be<int32_t> maximum_component_name_length;
-  xe::be<uint32_t> fs_name_length;
-  char fs_name[1];
-};
-static_assert_size(X_FILE_FS_ATTRIBUTE_INFORMATION, 16);
-
 struct CreateOptions {
   // https://processhacker.sourceforge.io/doc/ntioapi_8h.html
   static const uint32_t FILE_DIRECTORY_FILE = 0x00000001;
@@ -68,6 +38,41 @@ struct CreateOptions {
   // Optimization - file access will be random, not sequential.
   static const uint32_t FILE_RANDOM_ACCESS = 0x00000800;
 };
+
+static bool IsValidPath(const std::string_view s, bool is_pattern) {
+  // TODO(gibbed): validate path components individually
+  for (const auto& c : s) {
+    if (c <= 31 || c >= 127) {
+      return false;
+    }
+    switch (c) {
+      case '"':
+      // case '*':
+      case '+':
+      case ',':
+      // case ':':
+      case ';':
+      case '<':
+      case '=':
+      case '>':
+      // case '?':
+      case '|': {
+        return false;
+      }
+      case '*':
+      case '?': {
+        // Pattern-specific (for NtQueryDirectoryFile)
+        if (!is_pattern) {
+          return false;
+        }
+      }
+      default: {
+        break;
+      }
+    }
+  }
+  return true;
+}
 
 dword_result_t NtCreateFile(lpdword_t handle_out, dword_t desired_access,
                             pointer_t<X_OBJECT_ATTRIBUTES> object_attrs,
@@ -90,9 +95,16 @@ dword_result_t NtCreateFile(lpdword_t handle_out, dword_t desired_access,
   auto object_name =
       kernel_memory()->TranslateVirtual<X_ANSI_STRING*>(object_attrs->name_ptr);
 
+  vfs::Entry* root_entry = nullptr;
+
   // Compute path, possibly attrs relative.
-  std::string target_path =
-      util::TranslateAnsiString(kernel_memory(), object_name);
+  auto target_path = util::TranslateAnsiString(kernel_memory(), object_name);
+
+  // Enforce that the path is ASCII.
+  if (!IsValidPath(target_path, false)) {
+    return X_STATUS_OBJECT_NAME_INVALID;
+  }
+
   if (object_attrs->root_directory != 0xFFFFFFFD &&  // ObDosDevices
       object_attrs->root_directory != 0) {
     auto root_file = kernel_state()->object_table()->LookupObject<XFile>(
@@ -100,18 +112,15 @@ dword_result_t NtCreateFile(lpdword_t handle_out, dword_t desired_access,
     assert_not_null(root_file);
     assert_true(root_file->type() == XObject::Type::kTypeFile);
 
-    // Resolve the file using the device the root directory is part of.
-    auto device = root_file->device();
-    target_path = xe::join_paths(
-        device->mount_path(), xe::join_paths(root_file->path(), target_path));
+    root_entry = root_file->entry();
   }
 
   // Attempt open (or create).
   vfs::File* vfs_file;
   vfs::FileAction file_action;
   X_STATUS result = kernel_state()->file_system()->OpenFile(
-      target_path, vfs::FileDisposition((uint32_t)creation_disposition),
-      desired_access,
+      root_entry, target_path,
+      vfs::FileDisposition((uint32_t)creation_disposition), desired_access,
       (create_options & CreateOptions::FILE_DIRECTORY_FILE) != 0, &vfs_file,
       &file_action);
   object_ref<XFile> file = nullptr;
@@ -357,207 +366,6 @@ dword_result_t NtRemoveIoCompletion(
 }
 DECLARE_XBOXKRNL_EXPORT1(NtRemoveIoCompletion, kFileSystem, kImplemented);
 
-dword_result_t NtSetInformationFile(
-    dword_t file_handle, pointer_t<X_IO_STATUS_BLOCK> io_status_block,
-    lpvoid_t file_info, dword_t length, dword_t file_info_class) {
-  X_STATUS result = X_STATUS_SUCCESS;
-  uint32_t info = 0;
-
-  // Grab file.
-  auto file = kernel_state()->object_table()->LookupObject<XFile>(file_handle);
-  if (!file) {
-    result = X_STATUS_INVALID_HANDLE;
-  }
-
-  if (XSUCCEEDED(result)) {
-    switch (file_info_class) {
-      case XFileDispositionInformation: {
-        // Used to set deletion flag. Which we don't support. Probably?
-        info = 0;
-        bool delete_on_close =
-            (xe::load_and_swap<uint8_t>(file_info)) ? true : false;
-        XELOGW("NtSetInformationFile ignoring delete on close: %d",
-               delete_on_close);
-        break;
-      }
-      case XFilePositionInformation:
-        // struct FILE_POSITION_INFORMATION {
-        //   LARGE_INTEGER CurrentByteOffset;
-        // };
-        assert_true(length == 8);
-        info = 8;
-        file->set_position(xe::load_and_swap<uint64_t>(file_info));
-        break;
-      case XFileAllocationInformation:
-        assert_true(length == 8);
-        info = 8;
-        XELOGW("NtSetInformationFile ignoring alloc");
-        break;
-      case XFileEndOfFileInformation: {
-        assert_true(length == 8);
-        auto eof = xe::load_and_swap<uint64_t>(file_info);
-        result = file->SetLength(eof);
-
-        // Update the files vfs::Entry information
-        file->entry()->update();
-        break;
-      }
-      case XFileCompletionInformation: {
-        // Info contains IO Completion handle and completion key
-        assert_true(length == 8);
-
-        auto handle = xe::load_and_swap<uint32_t>(file_info + 0x0);
-        auto key = xe::load_and_swap<uint32_t>(file_info + 0x4);
-        auto port =
-            kernel_state()->object_table()->LookupObject<XIOCompletion>(handle);
-        if (!port) {
-          result = X_STATUS_INVALID_HANDLE;
-          break;
-        }
-
-        file->RegisterIOCompletionPort(key, port);
-        break;
-      }
-      default:
-        // Unsupported, for now.
-        assert_always();
-        info = 0;
-        break;
-    }
-  }
-
-  if (io_status_block) {
-    io_status_block->status = result;
-    io_status_block->information = info;
-  }
-
-  return result;
-}
-DECLARE_XBOXKRNL_EXPORT2(NtSetInformationFile, kFileSystem, kImplemented,
-                         kHighFrequency);
-
-struct X_IO_STATUS_BLOCK {
-  union {
-    xe::be<uint32_t> status;
-    xe::be<uint32_t> pointer;
-  };
-  xe::be<uint32_t> information;
-};
-
-dword_result_t NtQueryInformationFile(
-    dword_t file_handle, pointer_t<X_IO_STATUS_BLOCK> io_status_block_ptr,
-    lpvoid_t file_info_ptr, dword_t length, dword_t file_info_class) {
-  X_STATUS result = X_STATUS_SUCCESS;
-  uint32_t info = 0;
-
-  // Grab file.
-  auto file = kernel_state()->object_table()->LookupObject<XFile>(file_handle);
-  if (file) {
-    switch (file_info_class) {
-      case XFileInternalInformation:
-        // Internal unique file pointer. Not sure why anyone would want this.
-        assert_true(length == 8);
-        info = 8;
-        // TODO(benvanik): use pointer to fs:: entry?
-        xe::store_and_swap<uint64_t>(file_info_ptr,
-                                     xe::memory::hash_combine(0, file->path()));
-        break;
-      case XFilePositionInformation:
-        // struct FILE_POSITION_INFORMATION {
-        //   LARGE_INTEGER CurrentByteOffset;
-        // };
-        assert_true(length == 8);
-        info = 8;
-        xe::store_and_swap<uint64_t>(file_info_ptr, file->position());
-        break;
-      case XFileNetworkOpenInformation: {
-        // struct FILE_NETWORK_OPEN_INFORMATION {
-        //   LARGE_INTEGER CreationTime;
-        //   LARGE_INTEGER LastAccessTime;
-        //   LARGE_INTEGER LastWriteTime;
-        //   LARGE_INTEGER ChangeTime;
-        //   LARGE_INTEGER AllocationSize;
-        //   LARGE_INTEGER EndOfFile;
-        //   ULONG         FileAttributes;
-        //   ULONG         Unknown;
-        // };
-        assert_true(length == 56);
-
-        // Make sure we're working with up-to-date information, just in case the
-        // file size has changed via something other than NtSetInfoFile
-        // (eg. seems NtWriteFile might extend the file in some cases)
-        file->entry()->update();
-
-        auto file_info = file_info_ptr.as<X_FILE_NETWORK_OPEN_INFORMATION*>();
-        file_info->creation_time = file->entry()->create_timestamp();
-        file_info->last_access_time = file->entry()->access_timestamp();
-        file_info->last_write_time = file->entry()->write_timestamp();
-        file_info->change_time = file->entry()->write_timestamp();
-        file_info->allocation_size = file->entry()->allocation_size();
-        file_info->end_of_file = file->entry()->size();
-        file_info->attributes = file->entry()->attributes();
-        info = 56;
-        break;
-      }
-      case XFileXctdCompressionInformation: {
-        assert_true(length == 4);
-        XELOGE(
-            "NtQueryInformationFile(XFileXctdCompressionInformation) "
-            "unimplemented");
-        // This is wrong and puts files into wrong states for games that use
-        // XctdDecompression.
-        /*
-        uint32_t magic;
-        uint32_t bytes_read;
-        uint64_t cur_pos = file->position();
-
-        file->set_position(0);
-        // FIXME(Triang3l): For now, XFile can be read only to guest buffers -
-        // this line won't work, implement reading to host buffers if needed.
-        result = file->Read(&magic, sizeof(magic), 0, &bytes_read);
-        if (XSUCCEEDED(result)) {
-          if (bytes_read == sizeof(magic)) {
-            info = 4;
-            *file_info_ptr.as<xe::be<uint32_t>*>() =
-                magic == xe::byte_swap(0x0FF512ED) ? 1 : 0;
-          } else {
-            result = X_STATUS_UNSUCCESSFUL;
-          }
-        }
-        file->set_position(cur_pos);
-        info = 4;
-        */
-        xe::store_and_swap<uint32_t>(file_info_ptr, 0);
-        result = X_STATUS_UNSUCCESSFUL;
-        info = 0;
-      } break;
-      case XFileSectorInformation:
-        // TODO(benvanik): return sector this file's on.
-        assert_true(length == 4);
-        XELOGE("NtQueryInformationFile(XFileSectorInformation) unimplemented");
-        result = X_STATUS_UNSUCCESSFUL;
-        info = 0;
-        break;
-      default:
-        // Unsupported, for now.
-        assert_always();
-        info = 0;
-        result = X_STATUS_UNSUCCESSFUL;
-        break;
-    }
-  } else {
-    result = X_STATUS_INVALID_HANDLE;
-  }
-
-  if (io_status_block_ptr) {
-    io_status_block_ptr->status = result;
-    io_status_block_ptr->information = info;  // # bytes written
-  }
-
-  return result;
-}
-DECLARE_XBOXKRNL_EXPORT1(NtQueryInformationFile, kFileSystem, kImplemented);
-
 dword_result_t NtQueryFullAttributesFile(
     pointer_t<X_OBJECT_ATTRIBUTES> obj_attribs,
     pointer_t<X_FILE_NETWORK_OPEN_INFORMATION> file_info) {
@@ -574,9 +382,15 @@ dword_result_t NtQueryFullAttributesFile(
     assert_always();
   }
 
+  auto target_path = util::TranslateAnsiString(kernel_memory(), object_name);
+
+  // Enforce that the path is ASCII.
+  if (!IsValidPath(target_path, false)) {
+    return X_STATUS_OBJECT_NAME_INVALID;
+  }
+
   // Resolve the file using the virtual file system.
-  auto entry = kernel_state()->file_system()->ResolvePath(
-      util::TranslateAnsiString(kernel_memory(), object_name));
+  auto entry = kernel_state()->file_system()->ResolvePath(target_path);
   if (entry) {
     // Found.
     file_info->creation_time = entry->create_timestamp();
@@ -594,82 +408,6 @@ dword_result_t NtQueryFullAttributesFile(
 }
 DECLARE_XBOXKRNL_EXPORT1(NtQueryFullAttributesFile, kFileSystem, kImplemented);
 
-dword_result_t NtQueryVolumeInformationFile(
-    dword_t file_handle, pointer_t<X_IO_STATUS_BLOCK> io_status_block_ptr,
-    lpvoid_t fs_info_ptr, dword_t length, dword_t fs_info_class) {
-  X_STATUS result = X_STATUS_SUCCESS;
-  uint32_t info = 0;
-
-  // Grab file.
-  auto file = kernel_state()->object_table()->LookupObject<XFile>(file_handle);
-  if (file) {
-    switch (fs_info_class) {
-      case 1: {  // FileFsVolumeInformation
-        // TODO(gibbed): actual value
-        std::string name = "test";
-        X_FILE_FS_VOLUME_INFORMATION* volume_info =
-            fs_info_ptr.as<X_FILE_FS_VOLUME_INFORMATION*>();
-        volume_info->creation_time = 0;
-        volume_info->serial_number = 12345678;
-        volume_info->supports_objects = 0;
-        volume_info->label_length = uint32_t(name.size());
-        std::memcpy(volume_info->label, name.data(), name.size());
-        info = length;
-        break;
-      }
-      case 3: {  // FileFsSizeInformation
-        X_FILE_FS_SIZE_INFORMATION* fs_size_info =
-            fs_info_ptr.as<X_FILE_FS_SIZE_INFORMATION*>();
-        fs_size_info->total_allocation_units =
-            file->device()->total_allocation_units();
-        fs_size_info->available_allocation_units =
-            file->device()->available_allocation_units();
-        fs_size_info->sectors_per_allocation_unit =
-            file->device()->sectors_per_allocation_unit();
-        fs_size_info->bytes_per_sector = file->device()->bytes_per_sector();
-        info = length;
-        break;
-      }
-      case 5: {  // FileFsAttributeInformation
-        // TODO(gibbed): actual value
-        std::string name = "test";
-        X_FILE_FS_ATTRIBUTE_INFORMATION* fs_attribute_info =
-            fs_info_ptr.as<X_FILE_FS_ATTRIBUTE_INFORMATION*>();
-        fs_attribute_info->attributes = 0;
-        fs_attribute_info->maximum_component_name_length = 255;
-        fs_attribute_info->fs_name_length = uint32_t(name.size());
-        std::memcpy(fs_attribute_info->fs_name, name.data(), name.size());
-        info = length;
-        break;
-      }
-      case 2:  // FileFsLabelInformation
-      case 4:  // FileFsDeviceInformation
-      case 6:  // FileFsControlInformation
-      case 7:  // FileFsFullSizeInformation
-      case 8:  // FileFsObjectIdInformation
-      default:
-        // Unsupported, for now.
-        assert_always();
-        info = 0;
-        break;
-    }
-  } else {
-    result = X_STATUS_NO_SUCH_FILE;
-  }
-
-  if (XFAILED(result)) {
-    info = 0;
-  }
-  if (io_status_block_ptr) {
-    io_status_block_ptr->status = result;
-    io_status_block_ptr->information = info;
-  }
-
-  return result;
-}
-DECLARE_XBOXKRNL_EXPORT1(NtQueryVolumeInformationFile, kFileSystem,
-                         kImplemented);
-
 dword_result_t NtQueryDirectoryFile(
     dword_t file_handle, dword_t event_handle, function_t apc_routine,
     lpvoid_t apc_context, pointer_t<X_IO_STATUS_BLOCK> io_status_block,
@@ -684,11 +422,16 @@ dword_result_t NtQueryDirectoryFile(
 
   auto file = kernel_state()->object_table()->LookupObject<XFile>(file_handle);
   auto name = util::TranslateAnsiString(kernel_memory(), file_name);
+
+  // Enforce that the path is ASCII.
+  if (!IsValidPath(name, true)) {
+    return X_STATUS_OBJECT_NAME_INVALID;
+  }
+
   if (file) {
     X_FILE_DIRECTORY_INFORMATION dir_info = {0};
-    result = file->QueryDirectory(file_info_ptr, length,
-                                  !name.empty() ? name.c_str() : nullptr,
-                                  restart_scan != 0);
+    result =
+        file->QueryDirectory(file_info_ptr, length, name, restart_scan != 0);
     if (XSUCCEEDED(result)) {
       info = length;
     }
@@ -737,12 +480,17 @@ dword_result_t NtOpenSymbolicLinkObject(
 
   std::string target_path =
       util::TranslateAnsiString(kernel_memory(), object_name);
+
+  // Enforce that the path is ASCII.
+  if (!IsValidPath(target_path, false)) {
+    return X_STATUS_OBJECT_NAME_INVALID;
+  }
+
   if (object_attrs->root_directory != 0) {
     assert_always();
   }
 
-  auto pos = target_path.find("\\??\\");
-  if (pos != target_path.npos && pos == 0) {
+  if (utf8::starts_with(target_path, "\\??\\")) {
     target_path = target_path.substr(4);  // Strip the full qualifier
   }
 

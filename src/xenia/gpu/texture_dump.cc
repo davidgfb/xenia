@@ -57,22 +57,22 @@ void TextureDump(const TextureInfo& src, void* buffer, size_t length) {
 
   dds_header.pixel_format.size = sizeof(dds_header.pixel_format);
   switch (src.format) {
-    case TextureFormat::k_DXT1: {
+    case xenos::TextureFormat::k_DXT1: {
       dds_header.pixel_format.flags = 0x4u;
       dds_header.pixel_format.fourcc = '1TXD';
       break;
     }
-    case TextureFormat::k_DXT2_3: {
+    case xenos::TextureFormat::k_DXT2_3: {
       dds_header.pixel_format.flags = 0x4u;
       dds_header.pixel_format.fourcc = '3TXD';
       break;
     }
-    case TextureFormat::k_DXT4_5: {
+    case xenos::TextureFormat::k_DXT4_5: {
       dds_header.pixel_format.flags = 0x4u;
       dds_header.pixel_format.fourcc = '5TXD';
       break;
     }
-    case TextureFormat::k_8_8_8_8: {
+    case xenos::TextureFormat::k_8_8_8_8: {
       dds_header.pixel_format.flags = 0x1u | 0x40u;
       dds_header.pixel_format.rgb_bit_count = 32;
       dds_header.pixel_format.r_bit_mask = 0x00FF0000u;
@@ -85,7 +85,7 @@ void TextureDump(const TextureInfo& src, void* buffer, size_t length) {
       assert_unhandled_case(src.format);
       std::memset(&dds_header.pixel_format, 0xCD,
                   sizeof(dds_header.pixel_format));
-      XELOGW("Skipping %s for texture dump.", src.format_info()->name);
+      XELOGW("Skipping {} for texture dump.", src.format_info()->name);
       return;
     }
   }
@@ -93,12 +93,12 @@ void TextureDump(const TextureInfo& src, void* buffer, size_t length) {
   dds_header.caps[0] = 8u | 0x1000u;
 
   static int dump_counter = 0;
-  char path[256];
-  sprintf(path, "texture_dumps\\%05d_%.8X_%.8X_%s.dds", dump_counter++,
-          src.memory.base_address, src.memory.mip_address,
-          src.format_info()->name);
+  std::filesystem::path path = "texture_dumps";
+  path /= fmt::format("{:05d}_{:08X}_{:08X}_{:08X}.dds", dump_counter++,
+                      src.memory.base_address, src.memory.mip_address,
+                      src.format_info()->name);
 
-  FILE* handle = fopen(path, "wb");
+  FILE* handle = filesystem::OpenFile(path, "wb");
   if (handle) {
     const uint32_t signature = ' SDD';
     fwrite(&signature, sizeof(signature), 1, handle);
