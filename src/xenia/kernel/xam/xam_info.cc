@@ -8,6 +8,7 @@
  */
 
 #include "xenia/base/logging.h"
+#include "xenia/base/string_util.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/user_module.h"
 #include "xenia/kernel/util/shim_utils.h"
@@ -26,9 +27,6 @@
 namespace xe {
 namespace kernel {
 namespace xam {
-
-constexpr uint32_t X_LANGUAGE_ENGLISH = 1;
-constexpr uint32_t X_LANGUAGE_JAPANESE = 2;
 
 dword_result_t XamFeatureEnabled(dword_t unk) { return 0; }
 DECLARE_XAM_EXPORT1(XamFeatureEnabled, kNone, kStub);
@@ -74,15 +72,15 @@ static SYSTEMTIME xeGetLocalSystemTime(uint64_t filetime) {
 
 void XamFormatDateString(dword_t unk, qword_t filetime, lpvoid_t output_buffer,
                          dword_t output_count) {
-  std::memset(output_buffer, 0, output_count * 2);
+  std::memset(output_buffer, 0, output_count * sizeof(char16_t));
 
 // TODO: implement this for other platforms
 #if XE_PLATFORM_WIN32
   auto st = xeGetLocalSystemTime(filetime);
   // TODO: format this depending on users locale?
   auto str = fmt::format(u"{:02d}/{:02d}/{}", st.wMonth, st.wDay, st.wYear);
-  auto copy_length = std::min(size_t(output_count), str.size()) * 2;
-  xe::copy_and_swap(output_buffer.as<char16_t*>(), str.c_str(), copy_length);
+  xe::string_util::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str,
+                                            output_count);
 #else
   assert_always();
 #endif
@@ -91,15 +89,15 @@ DECLARE_XAM_EXPORT1(XamFormatDateString, kNone, kImplemented);
 
 void XamFormatTimeString(dword_t unk, qword_t filetime, lpvoid_t output_buffer,
                          dword_t output_count) {
-  std::memset(output_buffer, 0, output_count * 2);
+  std::memset(output_buffer, 0, output_count * sizeof(char16_t));
 
 // TODO: implement this for other platforms
 #if XE_PLATFORM_WIN32
   auto st = xeGetLocalSystemTime(filetime);
   // TODO: format this depending on users locale?
   auto str = fmt::format(u"{:02d}:{:02d}", st.wHour, st.wMinute);
-  auto copy_count = std::min(size_t(output_count), str.size());
-  xe::copy_and_swap(output_buffer.as<char16_t*>(), str.c_str(), copy_count);
+  xe::string_util::copy_and_swap_truncating(output_buffer.as<char16_t*>(), str,
+                                            output_count);
 #else
   assert_always();
 #endif
@@ -113,7 +111,7 @@ dword_result_t keXamBuildResourceLocator(uint64_t module,
                                          uint32_t buffer_count) {
   std::u16string path;
   if (!module) {
-    path = fmt::format(u"file://media:/{0}.xzp#{0}", container, resource);
+    path = fmt::format(u"file://media:/{}.xzp#{}", container, resource);
     XELOGD(
         "XamBuildResourceLocator({0}) returning locator to local file {0}.xzp",
         xe::to_utf8(container));
@@ -121,8 +119,8 @@ dword_result_t keXamBuildResourceLocator(uint64_t module,
     path = fmt::format(u"section://{:X},{}#{}", (uint32_t)module, container,
                        resource);
   }
-  auto copy_count = std::min(size_t(buffer_count), path.size());
-  xe::copy_and_swap(buffer_ptr.as<char16_t*>(), path.c_str(), copy_count);
+  xe::string_util::copy_and_swap_truncating(buffer_ptr.as<char16_t*>(), path,
+                                            buffer_count);
   return 0;
 }
 
@@ -207,19 +205,19 @@ dword_result_t XGetGameRegion() { return xeXGetGameRegion(); }
 DECLARE_XAM_EXPORT1(XGetGameRegion, kNone, kStub);
 
 dword_result_t XGetLanguage() {
-  uint32_t desired_language = X_LANGUAGE_ENGLISH;
+  auto desired_language = XLanguage::kEnglish;
 
   // Switch the language based on game region.
   // TODO(benvanik): pull from xex header.
   uint32_t game_region = XEX_REGION_NTSCU;
   if (game_region & XEX_REGION_NTSCU) {
-    desired_language = X_LANGUAGE_ENGLISH;
+    desired_language = XLanguage::kEnglish;
   } else if (game_region & XEX_REGION_NTSCJ) {
-    desired_language = X_LANGUAGE_JAPANESE;
+    desired_language = XLanguage::kJapanese;
   }
   // Add more overrides?
 
-  return desired_language;
+  return uint32_t(desired_language);
 }
 DECLARE_XAM_EXPORT1(XGetLanguage, kNone, kImplemented);
 
@@ -335,91 +333,6 @@ dword_result_t XamFree(lpdword_t ptr) {
   return X_ERROR_SUCCESS;
 }
 DECLARE_XAM_EXPORT1(XamFree, kMemory, kImplemented);
-
-// https://github.com/LestaD/SourceEngine2007/blob/master/se2007/engine/xboxsystem.cpp#L518
-dword_result_t XamEnumerate(dword_t handle, dword_t flags, lpvoid_t buffer,
-                            dword_t buffer_length, lpdword_t items_returned,
-                            pointer_t<XAM_OVERLAPPED> overlapped) {
-  assert_true(flags == 0);
-
-  auto e = kernel_state()->object_table()->LookupObject<XEnumerator>(handle);
-  if (!e) {
-    if (overlapped) {
-      kernel_state()->CompleteOverlappedImmediateEx(
-          overlapped, X_ERROR_INVALID_HANDLE, X_ERROR_INVALID_HANDLE, 0);
-      return X_ERROR_IO_PENDING;
-    } else {
-      return X_ERROR_INVALID_HANDLE;
-    }
-  }
-
-  size_t actual_buffer_length = (uint32_t)buffer_length;
-  if (buffer_length == e->items_per_enumerate()) {
-    actual_buffer_length = e->item_size() * e->items_per_enumerate();
-    // Known culprits:
-    //   Final Fight: Double Impact (saves)
-    XELOGW(
-        "Broken usage of XamEnumerate! buffer length={:X} vs actual "
-        "length={:X} "
-        "(item size={:X}, items per enumerate={})",
-        (uint32_t)buffer_length, actual_buffer_length, e->item_size(),
-        e->items_per_enumerate());
-  }
-
-  buffer.Zero(actual_buffer_length);
-
-  X_RESULT result;
-  uint32_t item_count = 0;
-
-  if (actual_buffer_length < e->item_size()) {
-    result = X_ERROR_INSUFFICIENT_BUFFER;
-  } else if (e->current_item() >= e->item_count()) {
-    result = X_ERROR_NO_MORE_FILES;
-  } else {
-    auto item_buffer = buffer.as<uint8_t*>();
-    auto max_items = actual_buffer_length / e->item_size();
-    while (max_items--) {
-      if (!e->WriteItem(item_buffer)) {
-        break;
-      }
-      item_buffer += e->item_size();
-      item_count++;
-    }
-    result = X_ERROR_SUCCESS;
-  }
-
-  if (items_returned) {
-    assert_true(!overlapped);
-    *items_returned = result == X_ERROR_SUCCESS ? item_count : 0;
-    return result;
-  } else if (overlapped) {
-    assert_true(!items_returned);
-    kernel_state()->CompleteOverlappedImmediateEx(
-        overlapped,
-        result == X_ERROR_SUCCESS ? X_ERROR_SUCCESS : X_ERROR_FUNCTION_FAILED,
-        X_HRESULT_FROM_WIN32(result),
-        result == X_ERROR_SUCCESS ? item_count : 0);
-    return X_ERROR_IO_PENDING;
-  } else {
-    assert_always();
-    return X_ERROR_INVALID_PARAMETER;
-  }
-}
-DECLARE_XAM_EXPORT1(XamEnumerate, kNone, kImplemented);
-
-dword_result_t XamCreateEnumeratorHandle(unknown_t unk1, unknown_t unk2,
-                                         unknown_t unk3, unknown_t unk4,
-                                         unknown_t unk5, unknown_t unk6,
-                                         unknown_t unk7, unknown_t unk8) {
-  return X_ERROR_INVALID_PARAMETER;
-}
-DECLARE_XAM_EXPORT1(XamCreateEnumeratorHandle, kNone, kStub);
-
-dword_result_t XamGetPrivateEnumStructureFromHandle(unknown_t unk1,
-                                                    unknown_t unk2) {
-  return X_ERROR_INVALID_PARAMETER;
-}
-DECLARE_XAM_EXPORT1(XamGetPrivateEnumStructureFromHandle, kNone, kStub);
 
 dword_result_t XamQueryLiveHiveW(lpu16string_t name, lpvoid_t out_buf,
                                  dword_t out_size, dword_t type /* guess */) {

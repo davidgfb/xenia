@@ -133,9 +133,8 @@ class CommandProcessor {
   // May be called not only from the command processor thread when the command
   // processor is paused, and the termination of this function may be explicitly
   // awaited.
-  virtual void InitializeShaderStorage(
-      const std::filesystem::path& storage_root, uint32_t title_id,
-      bool blocking);
+  virtual void InitializeShaderStorage(const std::filesystem::path& cache_root,
+                                       uint32_t title_id, bool blocking);
 
   virtual void RequestFrameTrace(const std::filesystem::path& root_path);
   virtual void BeginTracing(const std::filesystem::path& root_path);
@@ -145,8 +144,8 @@ class CommandProcessor {
 
   virtual void RestoreEdramSnapshot(const void* snapshot) = 0;
 
-  void InitializeRingBuffer(uint32_t ptr, uint32_t page_count);
-  void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size);
+  void InitializeRingBuffer(uint32_t ptr, uint32_t size_log2);
+  void EnableReadPointerWriteBack(uint32_t ptr, uint32_t block_size_log2);
 
   void UpdateWritePointer(uint32_t value);
 

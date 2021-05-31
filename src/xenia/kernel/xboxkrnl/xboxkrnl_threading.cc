@@ -205,30 +205,48 @@ dword_result_t NtSuspendThread(dword_t handle, lpdword_t suspend_count_ptr) {
 }
 DECLARE_XBOXKRNL_EXPORT1(NtSuspendThread, kThreading, kImplemented);
 
-void KeSetCurrentStackPointers(lpvoid_t stack_ptr,
-                               pointer_t<X_KTHREAD> cur_thread,
+void KeSetCurrentStackPointers(lpvoid_t stack_ptr, pointer_t<X_KTHREAD> thread,
                                lpvoid_t stack_alloc_base, lpvoid_t stack_base,
                                lpvoid_t stack_limit) {
-  auto thread = XThread::GetCurrentThread();
-  auto context = thread->thread_state()->context();
-  context->r[1] = stack_ptr.guest_address();
+  auto current_thread = XThread::GetCurrentThread();
+  auto context = current_thread->thread_state()->context();
+  auto pcr = kernel_memory()->TranslateVirtual<X_KPCR*>(
+      static_cast<uint32_t>(context->r[13]));
 
-  auto pcr =
-      kernel_memory()->TranslateVirtual<X_KPCR*>((uint32_t)context->r[13]);
+  thread->stack_alloc_base = stack_alloc_base.value();
+  thread->stack_base = stack_base.value();
+  thread->stack_limit = stack_limit.value();
   pcr->stack_base_ptr = stack_base.guest_address();
   pcr->stack_end_ptr = stack_limit.guest_address();
+  context->r[1] = stack_ptr.guest_address();
 
-  // TODO: Do we need to set the stack info on cur_thread?
+  // If a fiber is set, and the thread matches, reenter to avoid issues with
+  // host stack overflowing.
+  if (thread->fiber_ptr &&
+      current_thread->guest_object() == thread.guest_address()) {
+    current_thread->Reenter(static_cast<uint32_t>(context->lr));
+  }
 }
-DECLARE_XBOXKRNL_EXPORT1(KeSetCurrentStackPointers, kThreading, kImplemented);
+DECLARE_XBOXKRNL_EXPORT2(KeSetCurrentStackPointers, kThreading, kImplemented,
+                         kHighFrequency);
 
-dword_result_t KeSetAffinityThread(lpvoid_t thread_ptr, dword_t affinity) {
+dword_result_t KeSetAffinityThread(lpvoid_t thread_ptr, dword_t affinity,
+                                   lpdword_t previous_affinity_ptr) {
+  // The Xbox 360, according to disassembly of KeSetAffinityThread, unlike
+  // Windows NT, stores the previous affinity via the pointer provided as an
+  // argument, not in the return value - the return value is used for the
+  // result.
+  if (!affinity) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
   auto thread = XObject::GetNativeObject<XThread>(kernel_state(), thread_ptr);
   if (thread) {
+    if (previous_affinity_ptr) {
+      *previous_affinity_ptr = uint32_t(1) << thread->active_cpu();
+    }
     thread->SetAffinity(affinity);
   }
-
-  return (uint32_t)affinity;
+  return X_STATUS_SUCCESS;
 }
 DECLARE_XBOXKRNL_EXPORT1(KeSetAffinityThread, kThreading, kImplemented);
 
@@ -422,7 +440,7 @@ dword_result_t NtCreateEvent(lpdword_t handle_ptr,
   auto existing_object =
       LookupNamedObject<XEvent>(kernel_state(), obj_attributes_ptr);
   if (existing_object) {
-    if (existing_object->type() == XObject::kTypeEvent) {
+    if (existing_object->type() == XObject::Type::Event) {
       if (handle_ptr) {
         existing_object->RetainHandle();
         *handle_ptr = existing_object->handle();
@@ -549,7 +567,7 @@ dword_result_t NtCreateSemaphore(lpdword_t handle_ptr,
   auto existing_object =
       LookupNamedObject<XSemaphore>(kernel_state(), obj_attributes_ptr);
   if (existing_object) {
-    if (existing_object->type() == XObject::kTypeSemaphore) {
+    if (existing_object->type() == XObject::Type::Semaphore) {
       if (handle_ptr) {
         existing_object->RetainHandle();
         *handle_ptr = existing_object->handle();
@@ -603,7 +621,7 @@ dword_result_t NtCreateMutant(lpdword_t handle_out,
   auto existing_object = LookupNamedObject<XMutant>(
       kernel_state(), obj_attributes.guest_address());
   if (existing_object) {
-    if (existing_object->type() == XObject::kTypeMutant) {
+    if (existing_object->type() == XObject::Type::Mutant) {
       if (handle_out) {
         existing_object->RetainHandle();
         *handle_out = existing_object->handle();
@@ -664,7 +682,7 @@ dword_result_t NtCreateTimer(lpdword_t handle_ptr, lpvoid_t obj_attributes_ptr,
   auto existing_object =
       LookupNamedObject<XTimer>(kernel_state(), obj_attributes_ptr);
   if (existing_object) {
-    if (existing_object->type() == XObject::kTypeTimer) {
+    if (existing_object->type() == XObject::Type::Timer) {
       if (handle_ptr) {
         existing_object->RetainHandle();
         *handle_ptr = existing_object->handle();

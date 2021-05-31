@@ -12,16 +12,25 @@
 
 #include <cstddef>
 
+#include "xenia/base/xxhash.h"
+
 namespace xe {
 namespace hash {
 
 // For use in unordered_sets and unordered_maps (primarily multisets and
 // multimaps, with manual collision resolution), where the hash is calculated
-// externally (for instance, as XXH64), possibly requiring context data rather
+// externally (for instance, as XXH3), possibly requiring context data rather
 // than a pure function to calculate the hash
 template <typename Key>
 struct IdentityHasher {
   size_t operator()(const Key& key) const { return static_cast<size_t>(key); }
+};
+
+template <typename Key>
+struct XXHasher {
+  size_t operator()(const Key& key) const {
+    return static_cast<size_t>(XXH3_64bits(&key, sizeof(key)));
+  }
 };
 
 }  // namespace hash

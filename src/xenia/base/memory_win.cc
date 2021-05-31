@@ -11,6 +11,11 @@
 
 #include "xenia/base/platform_win.h"
 
+#if WINAPI_FAMILY_PARTITION(WINAPI_PARTITION_DESKTOP | \
+                            WINAPI_PARTITION_SYSTEM | WINAPI_PARTITION_GAMES)
+#define XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+#endif
+
 namespace xe {
 namespace memory {
 
@@ -42,6 +47,8 @@ DWORD ToWin32ProtectFlags(PageAccess access) {
       return PAGE_READONLY;
     case PageAccess::kReadWrite:
       return PAGE_READWRITE;
+    case PageAccess::kExecuteReadOnly:
+      return PAGE_EXECUTE_READ;
     case PageAccess::kExecuteReadWrite:
       return PAGE_EXECUTE_READWRITE;
     default:
@@ -63,11 +70,23 @@ PageAccess ToXeniaProtectFlags(DWORD access) {
       return PageAccess::kReadOnly;
     case PAGE_READWRITE:
       return PageAccess::kReadWrite;
+    case PAGE_EXECUTE_READ:
+      return PageAccess::kExecuteReadOnly;
     case PAGE_EXECUTE_READWRITE:
       return PageAccess::kExecuteReadWrite;
     default:
       return PageAccess::kNoAccess;
   }
+}
+
+bool IsWritableExecutableMemorySupported() {
+#ifdef XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+  return true;
+#else
+  // To test FromApp functions on desktop, undefine
+  // XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS and link to WindowsApp.lib.
+  return false;
+#endif
 }
 
 void* AllocFixed(void* base_address, size_t length,
@@ -88,7 +107,12 @@ void* AllocFixed(void* base_address, size_t length,
       break;
   }
   DWORD protect = ToWin32ProtectFlags(access);
+#ifdef XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
   return VirtualAlloc(base_address, length, alloc_type, protect);
+#else
+  return VirtualAllocFromApp(base_address, length, ULONG(alloc_type),
+                             ULONG(protect));
+#endif
 }
 
 bool DeallocFixed(void* base_address, size_t length,
@@ -115,13 +139,19 @@ bool Protect(void* base_address, size_t length, PageAccess access,
     *out_old_access = PageAccess::kNoAccess;
   }
   DWORD new_protect = ToWin32ProtectFlags(access);
+#ifdef XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
   DWORD old_protect = 0;
   BOOL result = VirtualProtect(base_address, length, new_protect, &old_protect);
+#else
+  ULONG old_protect = 0;
+  BOOL result = VirtualProtectFromApp(base_address, length, ULONG(new_protect),
+                                      &old_protect);
+#endif
   if (!result) {
     return false;
   }
   if (out_old_access) {
-    *out_old_access = ToXeniaProtectFlags(old_protect);
+    *out_old_access = ToXeniaProtectFlags(DWORD(old_protect));
   }
   return true;
 }
@@ -147,15 +177,25 @@ FileMappingHandle CreateFileMappingHandle(const std::filesystem::path& path,
                                           bool commit) {
   DWORD protect =
       ToWin32ProtectFlags(access) | (commit ? SEC_COMMIT : SEC_RESERVE);
-  return CreateFileMappingW(INVALID_HANDLE_VALUE, NULL, protect,
+  auto full_path = "Local" / path;
+#ifdef XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
+  return CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, protect,
                             static_cast<DWORD>(length >> 32),
-                            static_cast<DWORD>(length), path.c_str());
+                            static_cast<DWORD>(length), full_path.c_str());
+#else
+  return CreateFileMappingFromApp(INVALID_HANDLE_VALUE, nullptr, ULONG(protect),
+                                  ULONG64(length), full_path.c_str());
+#endif
 }
 
-void CloseFileMappingHandle(FileMappingHandle handle) { CloseHandle(handle); }
+void CloseFileMappingHandle(FileMappingHandle handle,
+                            const std::filesystem::path& path) {
+  CloseHandle(handle);
+}
 
 void* MapFileView(FileMappingHandle handle, void* base_address, size_t length,
                   PageAccess access, size_t file_offset) {
+#ifdef XE_BASE_MEMORY_WIN_USE_DESKTOP_FUNCTIONS
   DWORD target_address_low = static_cast<DWORD>(file_offset);
   DWORD target_address_high = static_cast<DWORD>(file_offset >> 32);
   DWORD file_access = 0;
@@ -165,6 +205,9 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length,
       break;
     case PageAccess::kReadWrite:
       file_access = FILE_MAP_ALL_ACCESS;
+      break;
+    case PageAccess::kExecuteReadOnly:
+      file_access = FILE_MAP_READ | FILE_MAP_EXECUTE;
       break;
     case PageAccess::kExecuteReadWrite:
       file_access = FILE_MAP_ALL_ACCESS | FILE_MAP_EXECUTE;
@@ -176,6 +219,25 @@ void* MapFileView(FileMappingHandle handle, void* base_address, size_t length,
   }
   return MapViewOfFileEx(handle, file_access, target_address_high,
                          target_address_low, length, base_address);
+#else
+  // VirtualAlloc2FromApp and MapViewOfFile3FromApp were added in 10.0.17134.0.
+  // https://docs.microsoft.com/en-us/uwp/win32-and-com/win32-apis
+  HANDLE process = GetCurrentProcess();
+  void* placeholder = VirtualAlloc2FromApp(
+      process, base_address, length, MEM_RESERVE | MEM_RESERVE_PLACEHOLDER,
+      PAGE_NOACCESS, nullptr, 0);
+  if (!placeholder) {
+    return nullptr;
+  }
+  void* mapping = MapViewOfFile3FromApp(
+      handle, process, placeholder, ULONG64(file_offset), length,
+      MEM_REPLACE_PLACEHOLDER, ULONG(ToWin32ProtectFlags(access)), nullptr, 0);
+  if (!mapping) {
+    VirtualFree(placeholder, length, MEM_RELEASE);
+    return nullptr;
+  }
+  return mapping;
+#endif
 }
 
 bool UnmapFileView(FileMappingHandle handle, void* base_address,

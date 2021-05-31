@@ -13,7 +13,7 @@ namespace xe {
 namespace kernel {
 
 XIOCompletion::XIOCompletion(KernelState* kernel_state)
-    : XObject(kernel_state, kType) {
+    : XObject(kernel_state, kObjectType) {
   notification_semaphore_ = threading::Semaphore::Create(0, kMaxNotifications);
 }
 
@@ -30,7 +30,7 @@ bool XIOCompletion::WaitForNotification(uint64_t wait_ticks,
                                         IONotification* notify) {
   auto ms = std::chrono::milliseconds(TimeoutTicksToMs(wait_ticks));
   auto res = threading::Wait(notification_semaphore_.get(), false, ms);
-  if (res == threading::WaitResult::kSuccess) {
+  if (res == threading::WaitResult::kSuccess || !wait_ticks) {
     std::unique_lock<std::mutex> lock(notification_lock_);
     assert_false(notifications_.empty());
 

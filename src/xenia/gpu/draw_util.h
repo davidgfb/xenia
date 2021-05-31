@@ -16,6 +16,7 @@
 #include "xenia/base/assert.h"
 #include "xenia/gpu/register_file.h"
 #include "xenia/gpu/registers.h"
+#include "xenia/gpu/shader.h"
 #include "xenia/gpu/trace_writer.h"
 #include "xenia/gpu/xenos.h"
 #include "xenia/memory.h"
@@ -33,6 +34,103 @@ namespace draw_util {
 // for use with the top-left rasterization rule later.
 int32_t FloatToD3D11Fixed16p8(float f32);
 
+// Whether with the current state, any samples to rasterize (for any reason, not
+// only to write something to a render target, but also to do sample counting or
+// pixel shader memexport) can be generated. Finally dropping draw calls can
+// only be done if the vertex shader doesn't memexport. Checks mostly special
+// cases (for both the guest and usual host implementations), not everything
+// like whether viewport / scissor are empty (until this truly matters in any
+// game, of course).
+bool IsRasterizationPotentiallyDone(const RegisterFile& regs,
+                                    bool primitive_polygonal);
+
+inline reg::RB_DEPTHCONTROL GetDepthControlForCurrentEdramMode(
+    const RegisterFile& regs) {
+  xenos::ModeControl edram_mode = regs.Get<reg::RB_MODECONTROL>().edram_mode;
+  if (edram_mode != xenos::ModeControl::kColorDepth &&
+      edram_mode != xenos::ModeControl::kDepth) {
+    // Both depth and stencil disabled (EDRAM depth and stencil ignored).
+    reg::RB_DEPTHCONTROL disabled;
+    disabled.value = 0;
+    return disabled;
+  }
+  return regs.Get<reg::RB_DEPTHCONTROL>();
+}
+
+inline bool DoesCoverageDependOnAlpha(reg::RB_COLORCONTROL rb_colorcontrol) {
+  return (rb_colorcontrol.alpha_test_enable &&
+          rb_colorcontrol.alpha_func != xenos::CompareFunction::kAlways) ||
+         rb_colorcontrol.alpha_to_mask_enable;
+}
+
+// Whether the pixel shader can be disabled on the host to speed up depth
+// pre-passes and shadowmaps. The shader must have its ucode analyzed. If
+// IsRasterizationPotentiallyDone, this shouldn't be called, and assumed false
+// instead. Helps reject the pixel shader in some cases - memexport draws in
+// Halo 3, and also most of some 1-point draws not covering anything done for
+// some reason in different games with a leftover pixel shader from the previous
+// draw, but with SQ_PROGRAM_CNTL destroyed, reducing the number of
+// unpredictable unneeded translations of random shaders with different host
+// modification bits, such as register count and depth format-related (though
+// shaders with side effects on depth or memory export will still be preserved).
+bool IsPixelShaderNeededWithRasterization(const Shader& shader,
+                                          const RegisterFile& regs);
+
+struct ViewportInfo {
+  // Offset from render target UV = 0 to +UV.
+  // For simplicity of cropping to the maximum size on the host; to match the
+  // Direct3D 12 clipping / scissoring behavior with a fractional viewport, to
+  // floor(TopLeftXY) ... floor(TopLeftXY + WidthHeight), on the real AMD, Intel
+  // and Nvidia hardware (not WARP); as well as to hide the differences between
+  // 0 and 8+ viewportSubPixelBits on Vulkan, and to prevent any numerical error
+  // in bound checking in host APIs, viewport bounds are returned as integers.
+  // Also they're returned as non-negative, also to make it easier to crop (so
+  // Vulkan maxViewportDimensions and viewportBoundsRange don't have to be
+  // handled separately - maxViewportDimensions is greater than or equal to the
+  // largest framebuffer image size, so it's safe, and viewportBoundsRange is
+  // always bigger than maxViewportDimensions. All fractional offsetting,
+  // including the half-pixel offset, and cropping are handled via ndc_scale and
+  // ndc_offset.
+  uint32_t xy_offset[2];
+  // Extent can be zero for an empty viewport - host APIs not supporting empty
+  // viewports need to use an empty scissor rectangle.
+  uint32_t xy_extent[2];
+  float z_min;
+  float z_max;
+  // The scale is applied before the offset (like using multiply-add).
+  float ndc_scale[3];
+  float ndc_offset[3];
+};
+// Converts the guest viewport (or fakes one if drawing without a viewport) to
+// a viewport, plus values to multiply-add the returned position by, usable on
+// host graphics APIs such as Direct3D 11+ and Vulkan, also forcing it to the
+// Direct3D clip space with 0...W Z rather than -W...W.
+void GetHostViewportInfo(const RegisterFile& regs, uint32_t resolution_scale,
+                         bool origin_bottom_left, uint32_t x_max,
+                         uint32_t y_max, bool allow_reverse_z,
+                         bool convert_z_to_float24, bool full_float24_in_0_to_1,
+                         bool pixel_shader_writes_depth,
+                         ViewportInfo& viewport_info_out);
+
+struct Scissor {
+  // Offset from render target UV = 0 to +UV.
+  uint32_t offset[2];
+  // Extent can be zero.
+  uint32_t extent[2];
+};
+void GetScissor(const RegisterFile& regs, Scissor& scissor_out,
+                bool clamp_to_surface_pitch = true);
+
+// Scales, and shift amounts of the upper 32 bits of the 32x32=64-bit
+// multiplication result, for fast division and multiplication by
+// EDRAM-tile-related amounts.
+constexpr uint32_t kDivideScale3 = 0xAAAAAAABu;
+constexpr uint32_t kDivideUpperShift3 = 1;
+constexpr uint32_t kDivideScale5 = 0xCCCCCCCDu;
+constexpr uint32_t kDivideUpperShift5 = 2;
+constexpr uint32_t kDivideScale15 = 0x88888889u;
+constexpr uint32_t kDivideUpperShift15 = 3;
+
 // To avoid passing values that the shader won't understand (even though
 // Direct3D 9 shouldn't pass them anyway).
 xenos::CopySampleSelect SanitizeCopySampleSelect(
@@ -44,11 +142,11 @@ xenos::CopySampleSelect SanitizeCopySampleSelect(
 
 union ResolveEdramPackedInfo {
   struct {
-    // With offset to the 160x32 region that local_x/y_div_8 are relative to,
-    // and with 32bpp/64bpp taken into account.
+    // With 32bpp/64bpp taken into account.
     uint32_t pitch_tiles : xenos::kEdramPitchTilesBits;
     xenos::MsaaSamples msaa_samples : xenos::kMsaaSamplesBits;
     uint32_t is_depth : 1;
+    // With offset to the 160x32 region that local_x/y_div_8 are relative to.
     uint32_t base_tiles : xenos::kEdramBaseTilesBits;
     uint32_t format : xenos::kRenderTargetFormatBits;
     uint32_t format_is_64bpp : 1;
@@ -91,26 +189,58 @@ union ResolveAddressPackedInfo {
 static_assert(sizeof(ResolveAddressPackedInfo) <= sizeof(uint32_t),
               "ResolveAddressPackedInfo must be packable in uint32_t");
 
+// Returns tiles actually covered by a resolve area. Row length used is width of
+// the area in tiles, but the pitch between rows is edram_info.pitch_tiles.
+void GetResolveEdramTileSpan(ResolveEdramPackedInfo edram_info,
+                             ResolveAddressPackedInfo address_info,
+                             uint32_t& base_out, uint32_t& row_length_used_out,
+                             uint32_t& rows_out);
+
+union ResolveCopyDestPitchPackedInfo {
+  struct {
+    // 0...16384/32.
+    uint32_t pitch_aligned_div_32 : xenos::kTexture2DCubeMaxWidthHeightLog2 +
+                                    2 - xenos::kTextureTileWidthHeightLog2;
+    uint32_t height_aligned_div_32 : xenos::kTexture2DCubeMaxWidthHeightLog2 +
+                                     2 - xenos::kTextureTileWidthHeightLog2;
+  };
+  uint32_t packed;
+};
+static_assert(sizeof(ResolveCopyDestPitchPackedInfo) <= sizeof(uint32_t),
+              "ResolveAddressPackedInfo must be packable in uint32_t");
+
 // For backends with Shader Model 5-like compute, host shaders to use to perform
 // copying in resolve operations.
 enum class ResolveCopyShaderIndex {
   kFast32bpp1x2xMSAA,
   kFast32bpp4xMSAA,
   kFast32bpp2xRes,
+  kFast32bpp3xRes1x2xMSAA,
+  kFast32bpp3xRes4xMSAA,
   kFast64bpp1x2xMSAA,
   kFast64bpp4xMSAA,
   kFast64bpp2xRes,
+  kFast64bpp3xRes,
 
   kFull8bpp,
   kFull8bpp2xRes,
+  kFull8bpp3xRes,
   kFull16bpp,
   kFull16bpp2xRes,
+  kFull16bppFrom32bpp3xRes,
+  kFull16bppFrom64bpp3xRes,
   kFull32bpp,
   kFull32bpp2xRes,
+  kFull32bppFrom32bpp3xRes,
+  kFull32bppFrom64bpp3xRes,
   kFull64bpp,
   kFull64bpp2xRes,
+  kFull64bppFrom32bpp3xRes,
+  kFull64bppFrom64bpp3xRes,
   kFull128bpp,
   kFull128bpp2xRes,
+  kFull128bppFrom32bpp3xRes,
+  kFull128bppFrom64bpp3xRes,
 
   kCount,
   kUnknown = kCount,
@@ -151,7 +281,7 @@ struct ResolveCopyShaderConstants {
     ResolveEdramPackedInfo edram_info;
     ResolveAddressPackedInfo address_info;
     reg::RB_COPY_DEST_INFO dest_info;
-    reg::RB_COPY_DEST_PITCH dest_pitch;
+    ResolveCopyDestPitchPackedInfo dest_pitch_aligned;
   };
   DestRelative dest_relative;
   uint32_t dest_base;
@@ -171,15 +301,23 @@ struct ResolveClearShaderConstants {
 struct ResolveInfo {
   reg::RB_COPY_CONTROL rb_copy_control;
 
-  // color_edram_info and depth_edram_info are set up if copying or clearing
-  // color and depth respectively, according to RB_COPY_CONTROL.
-  ResolveEdramPackedInfo color_edram_info;
+  // depth_edram_info / depth_original_base and color_edram_info /
+  // color_original_base are set up if copying or clearing color and depth
+  // respectively, according to RB_COPY_CONTROL.
   ResolveEdramPackedInfo depth_edram_info;
+  ResolveEdramPackedInfo color_edram_info;
+  // Original bases, without adjustment to a 160x32 region for packed offsets,
+  // for locating host render targets to perform clears if host render targets
+  // are used for EDRAM emulation - the same as the base that the render target
+  // will likely used for drawing next, to prevent unneeded tile ownership
+  // transfers between clears and first usage if clearing a subregion.
+  uint32_t depth_original_base;
+  uint32_t color_original_base;
 
   ResolveAddressPackedInfo address;
 
-  reg::RB_COPY_DEST_INFO rb_copy_dest_info;
-  reg::RB_COPY_DEST_PITCH rb_copy_dest_pitch;
+  reg::RB_COPY_DEST_INFO copy_dest_info;
+  ResolveCopyDestPitchPackedInfo copy_dest_pitch_aligned;
 
   // Memory range that will potentially be modified by copying, with
   // address.local_x/y_div_8 & 31 being the origin relative to it.
@@ -197,6 +335,16 @@ struct ResolveInfo {
     return rb_copy_control.copy_src_select >= xenos::kMaxColorRenderTargets;
   }
 
+  // See GetResolveEdramTileSpan documentation for explanation.
+  void GetCopyEdramTileSpan(uint32_t& base_out, uint32_t& row_length_used_out,
+                            uint32_t& rows_out, uint32_t& pitch_out) const {
+    ResolveEdramPackedInfo edram_info =
+        IsCopyingDepth() ? depth_edram_info : color_edram_info;
+    GetResolveEdramTileSpan(edram_info, address, base_out, row_length_used_out,
+                            rows_out);
+    pitch_out = edram_info.pitch_tiles;
+  }
+
   ResolveCopyShaderIndex GetCopyShader(
       uint32_t resolution_scale, ResolveCopyShaderConstants& constants_out,
       uint32_t& group_count_x_out, uint32_t& group_count_y_out) const;
@@ -210,23 +358,10 @@ struct ResolveInfo {
   }
 
   void GetDepthClearShaderConstants(
-      bool has_float32_copy, ResolveClearShaderConstants& constants_out) const {
+      ResolveClearShaderConstants& constants_out) const {
     assert_true(IsClearingDepth());
     constants_out.rt_specific.clear_value[0] = rb_depth_clear;
-    if (has_float32_copy) {
-      float depth32;
-      uint32_t depth24 = rb_depth_clear >> 8;
-      if (xenos::DepthRenderTargetFormat(depth_edram_info.format) ==
-          xenos::DepthRenderTargetFormat::kD24S8) {
-        depth32 = depth24 * float(1.0f / 16777215.0f);
-      } else {
-        depth32 = xenos::Float20e4To32(depth24);
-      }
-      constants_out.rt_specific.clear_value[1] =
-          *reinterpret_cast<const uint32_t*>(&depth32);
-    } else {
-      constants_out.rt_specific.clear_value[1] = rb_depth_clear;
-    }
+    constants_out.rt_specific.clear_value[1] = rb_depth_clear;
     constants_out.rt_specific.edram_info = depth_edram_info;
     constants_out.address_info = address;
   }
@@ -235,9 +370,8 @@ struct ResolveInfo {
       ResolveClearShaderConstants& constants_out) const {
     assert_true(IsClearingColor());
     // Not doing -32...32 to -1...1 clamping here as a hack for k_16_16 and
-    // k_16_16_16_16 blending emulation when using traditional host render
-    // targets as it would be inconsistent with the usual way of clearing with a
-    // quad.
+    // k_16_16_16_16 blending emulation when using host render targets as it
+    // would be inconsistent with the usual way of clearing with a depth quad.
     // TODO(Triang3l): Check which 32-bit portion is in which register.
     constants_out.rt_specific.clear_value[0] = rb_color_clear;
     constants_out.rt_specific.clear_value[1] = rb_color_clear_lo;
@@ -264,13 +398,14 @@ struct ResolveInfo {
 };
 
 // Returns false if there was an error obtaining the info making it totally
-// invalid. edram_16_as_minus_1_to_1 is false if 16_16 and 16_16_16_16 color
-// render target formats are properly emulated as -32...32, true if emulated as
-// snorm, with range limited to -1...1, but with correct blending within that
-// range.
+// invalid. fixed_16_truncated_to_minus_1_to_1 is false if 16_16 and 16_16_16_16
+// color render target formats are properly emulated as -32...32, true if
+// emulated as snorm, with range limited to -1...1, but with correct blending
+// within that range.
 bool GetResolveInfo(const RegisterFile& regs, const Memory& memory,
                     TraceWriter& trace_writer, uint32_t resolution_scale,
-                    bool edram_16_as_minus_1_to_1, ResolveInfo& info_out);
+                    bool fixed_16_truncated_to_minus_1_to_1,
+                    ResolveInfo& info_out);
 
 // Taking user configuration - stretching or letterboxing, overscan region to
 // crop to fill while maintaining the aspect ratio - into account, returns the

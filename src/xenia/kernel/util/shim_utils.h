@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2020 Ben Vanik. All rights reserved.                             *
+ * Copyright 2021 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -148,7 +148,7 @@ class Param {
 
  protected:
   Param() : ordinal_(-1) {}
-  explicit Param(Init& init) : ordinal_(--init.ordinal) {}
+  explicit Param(Init& init) : ordinal_(init.ordinal++) {}
 
   template <typename V>
   void LoadValue(Init& init, V* out_value) {
@@ -519,10 +519,13 @@ xe::cpu::Export* RegisterExport(R (*fn)(Ps&...), const char* name,
       ++export_entry->function_data.call_count;
       Param::Init init = {
           ppc_context,
-          sizeof...(Ps),
           0,
       };
-      auto params = std::make_tuple<Ps...>(Ps(init)...);
+      // Using braces initializer instead of make_tuple because braces
+      // enforce execution order across compilers.
+      // The make_tuple order is undefined per the C++ standard and
+      // cause inconsitencies between msvc and clang.
+      std::tuple<Ps...> params = {Ps(init)...};
       if (export_entry->tags & xe::cpu::ExportTag::kLog &&
           (!(export_entry->tags & xe::cpu::ExportTag::kHighFrequency) ||
            cvars::log_high_frequency_kernel_calls)) {
@@ -554,9 +557,13 @@ xe::cpu::Export* RegisterExport(void (*fn)(Ps&...), const char* name,
       ++export_entry->function_data.call_count;
       Param::Init init = {
           ppc_context,
-          sizeof...(Ps),
+          0,
       };
-      auto params = std::make_tuple<Ps...>(Ps(init)...);
+      // Using braces initializer instead of make_tuple because braces
+      // enforce execution order across compilers.
+      // The make_tuple order is undefined per the C++ standard and
+      // cause inconsitencies between msvc and clang.
+      std::tuple<Ps...> params = {Ps(init)...};
       if (export_entry->tags & xe::cpu::ExportTag::kLog &&
           (!(export_entry->tags & xe::cpu::ExportTag::kHighFrequency) ||
            cvars::log_high_frequency_kernel_calls)) {

@@ -18,33 +18,46 @@ namespace xe {
 namespace kernel {
 namespace xam {
 
-dword_result_t XamNotifyCreateListenerInternal(qword_t mask, dword_t unk,
-                                               dword_t one) {
-  // r4=1 may indicate user process?
+uint32_t xeXamNotifyCreateListener(uint64_t mask, uint32_t is_system,
+                                   uint32_t max_version) {
+  assert_true(max_version < 11);
+
+  if (max_version > 10) {
+    max_version = 10;
+  }
 
   auto listener =
       object_ref<XNotifyListener>(new XNotifyListener(kernel_state()));
-  listener->Initialize(mask);
+  listener->Initialize(mask, max_version);
 
   // Handle ref is incremented, so return that.
   uint32_t handle = listener->handle();
 
   return handle;
 }
-DECLARE_XAM_EXPORT2(XamNotifyCreateListenerInternal, kNone, kImplemented,
-                    kSketchy);
 
-dword_result_t XamNotifyCreateListener(qword_t mask, dword_t one) {
-  return XamNotifyCreateListenerInternal(mask, 0, one);
+dword_result_t XamNotifyCreateListener(qword_t mask, dword_t max_version) {
+  return xeXamNotifyCreateListener(mask, 0, max_version);
 }
 DECLARE_XAM_EXPORT1(XamNotifyCreateListener, kNone, kImplemented);
+
+dword_result_t XamNotifyCreateListenerInternal(qword_t mask, dword_t is_system,
+                                               dword_t max_version) {
+  return xeXamNotifyCreateListener(mask, is_system, max_version);
+}
+DECLARE_XAM_EXPORT1(XamNotifyCreateListenerInternal, kNone, kImplemented);
 
 // https://github.com/CodeAsm/ffplay360/blob/master/Common/AtgSignIn.cpp
 dword_result_t XNotifyGetNext(dword_t handle, dword_t match_id,
                               lpdword_t id_ptr, lpdword_t param_ptr) {
-  if (!handle) {
+  if (param_ptr) {
+    *param_ptr = 0;
+  }
+
+  if (!id_ptr) {
     return 0;
   }
+  *id_ptr = 0;
 
   // Grab listener.
   auto listener =
@@ -65,21 +78,13 @@ dword_result_t XNotifyGetNext(dword_t handle, dword_t match_id,
     dequeued = listener->DequeueNotification(&id, &param);
   }
 
+  *id_ptr = dequeued ? id : 0;
   // param_ptr may be null - Ghost Recon Advanced Warfighter 2 Demo explicitly
   // passes nullptr in the code.
   // https://github.com/xenia-project/xenia/pull/1577
-  if (dequeued) {
-    *id_ptr = id;
-    if (param_ptr) {
-      *param_ptr = param;
-    }
-  } else {
-    *id_ptr = 0;
-    if (param_ptr) {
-      *param_ptr = 0;
-    }
+  if (param_ptr) {
+    *param_ptr = dequeued ? param : 0;
   }
-
   return dequeued ? 1 : 0;
 }
 DECLARE_XAM_EXPORT2(XNotifyGetNext, kNone, kImplemented, kHighFrequency);

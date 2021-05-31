@@ -135,7 +135,7 @@ X_STATUS GraphicsSystem::Setup(cpu::Processor* processor,
       }));
   // As we run vblank interrupts the debugger must be able to suspend us.
   vsync_worker_thread_->set_can_debugger_suspend(true);
-  vsync_worker_thread_->set_name("GraphicsSystem Vsync");
+  vsync_worker_thread_->set_name("GPU VSync");
   vsync_worker_thread_->Create();
 
   if (cvars::trace_gpu_stream) {
@@ -220,13 +220,13 @@ void GraphicsSystem::WriteRegister(uint32_t addr, uint32_t value) {
   register_file_.values[r].u32 = value;
 }
 
-void GraphicsSystem::InitializeRingBuffer(uint32_t ptr, uint32_t log2_size) {
-  command_processor_->InitializeRingBuffer(ptr, log2_size + 0x3);
+void GraphicsSystem::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
+  command_processor_->InitializeRingBuffer(ptr, size_log2);
 }
 
 void GraphicsSystem::EnableReadPointerWriteBack(uint32_t ptr,
-                                                uint32_t block_size) {
-  command_processor_->EnableReadPointerWriteBack(ptr, block_size);
+                                                uint32_t block_size_log2) {
+  command_processor_->EnableReadPointerWriteBack(ptr, block_size_log2);
 }
 
 void GraphicsSystem::SetInterruptCallback(uint32_t callback,
@@ -276,8 +276,7 @@ void GraphicsSystem::ClearCaches() {
 }
 
 void GraphicsSystem::InitializeShaderStorage(
-    const std::filesystem::path& storage_root, uint32_t title_id,
-    bool blocking) {
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
   if (!cvars::store_shaders) {
     return;
   }
@@ -285,21 +284,18 @@ void GraphicsSystem::InitializeShaderStorage(
     if (command_processor_->is_paused()) {
       // Safe to run on any thread while the command processor is paused, no
       // race condition.
-      command_processor_->InitializeShaderStorage(storage_root, title_id, true);
+      command_processor_->InitializeShaderStorage(cache_root, title_id, true);
     } else {
       xe::threading::Fence fence;
-      command_processor_->CallInThread(
-          [this, storage_root, title_id, &fence]() {
-            command_processor_->InitializeShaderStorage(storage_root, title_id,
-                                                        true);
-            fence.Signal();
-          });
+      command_processor_->CallInThread([this, cache_root, title_id, &fence]() {
+        command_processor_->InitializeShaderStorage(cache_root, title_id, true);
+        fence.Signal();
+      });
       fence.Wait();
     }
   } else {
-    command_processor_->CallInThread([this, storage_root, title_id]() {
-      command_processor_->InitializeShaderStorage(storage_root, title_id,
-                                                  false);
+    command_processor_->CallInThread([this, cache_root, title_id]() {
+      command_processor_->InitializeShaderStorage(cache_root, title_id, false);
     });
   }
 }

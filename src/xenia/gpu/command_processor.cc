@@ -73,7 +73,7 @@ bool CommandProcessor::Initialize(
         WorkerThreadMain();
         return 0;
       }));
-  worker_thread_->set_name("GraphicsSystem Command Processor");
+  worker_thread_->set_name("GPU Commands");
   worker_thread_->Create();
 
   return true;
@@ -89,8 +89,8 @@ void CommandProcessor::Shutdown() {
 }
 
 void CommandProcessor::InitializeShaderStorage(
-    const std::filesystem::path& storage_root, uint32_t title_id,
-    bool blocking) {}
+    const std::filesystem::path& cache_root, uint32_t title_id, bool blocking) {
+}
 
 void CommandProcessor::RequestFrameTrace(
     const std::filesystem::path& root_path) {
@@ -257,22 +257,21 @@ bool CommandProcessor::SetupContext() { return true; }
 
 void CommandProcessor::ShutdownContext() { context_.reset(); }
 
-void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t log2_size) {
+void CommandProcessor::InitializeRingBuffer(uint32_t ptr, uint32_t size_log2) {
   read_ptr_index_ = 0;
   primary_buffer_ptr_ = ptr;
-  primary_buffer_size_ = 1 << log2_size;
+  primary_buffer_size_ = uint32_t(1) << (size_log2 + 3);
 }
 
 void CommandProcessor::EnableReadPointerWriteBack(uint32_t ptr,
-                                                  uint32_t block_size) {
+                                                  uint32_t block_size_log2) {
   // CP_RB_RPTR_ADDR Ring Buffer Read Pointer Address 0x70C
   // ptr = RB_RPTR_ADDR, pointer to write back the address to.
   read_ptr_writeback_ptr_ = ptr;
   // CP_RB_CNTL Ring Buffer Control 0x704
-  // block_size = RB_BLKSZ, number of quadwords read between updates of the
-  //              read pointer.
-  read_ptr_update_freq_ =
-      static_cast<uint32_t>(pow(2.0, static_cast<double>(block_size)) / 4);
+  // block_size = RB_BLKSZ, log2 of number of quadwords read between updates of
+  //              the read pointer.
+  read_ptr_update_freq_ = uint32_t(1) << block_size_log2 >> 2;
 }
 
 void CommandProcessor::UpdateWritePointer(uint32_t value) {
@@ -728,9 +727,17 @@ bool CommandProcessor::ExecutePacketType3(RingBuffer* reader, uint32_t packet) {
     } break;
     case PM4_CONTEXT_UPDATE: {
       assert_true(count == 1);
-      uint64_t value = reader->ReadAndSwap<uint32_t>();
+      uint32_t value = reader->ReadAndSwap<uint32_t>();
       XELOGGPU("GPU context update = {:08X}", value);
       assert_true(value == 0);
+      result = true;
+      break;
+    }
+    case PM4_WAIT_FOR_IDLE: {
+      // This opcode is used by "Duke Nukem Forever" while going/being ingame
+      assert_true(count == 1);
+      uint32_t value = reader->ReadAndSwap<uint32_t>();
+      XELOGGPU("GPU wait for idle = {:08X}", value);
       result = true;
       break;
     }
@@ -1138,6 +1145,7 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_EXT(RingBuffer* reader,
 bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(RingBuffer* reader,
                                                           uint32_t packet,
                                                           uint32_t count) {
+  const uint32_t kQueryFinished = xe::byte_swap(0xFFFFFEED);
   assert_true(count == 1);
   uint32_t initiator = reader->ReadAndSwap<uint32_t>();
   // Writeback initiator.
@@ -1153,10 +1161,13 @@ bool CommandProcessor::ExecutePacketType3_EVENT_WRITE_ZPD(RingBuffer* reader,
             register_file_->values[XE_GPU_REG_RB_SAMPLE_COUNT_ADDR].u32);
     // 0xFFFFFEED is written to this two locations by D3D only on D3DISSUE_END
     // and used to detect a finished query.
-    bool isEnd = pSampleCounts->ZPass_A == xe::byte_swap(0xFFFFFEED) &&
-                 pSampleCounts->ZPass_B == xe::byte_swap(0xFFFFFEED);
+    bool is_end_via_z_pass = pSampleCounts->ZPass_A == kQueryFinished &&
+                             pSampleCounts->ZPass_B == kQueryFinished;
+    // Older versions of D3D also checks for ZFail (First Gears of War)
+    bool is_end_via_z_fail = pSampleCounts->ZFail_A == kQueryFinished &&
+                             pSampleCounts->ZFail_B == kQueryFinished;
     std::memset(pSampleCounts, 0, sizeof(xe_gpu_depth_sample_counts));
-    if (isEnd) {
+    if (is_end_via_z_pass || is_end_via_z_fail) {
       pSampleCounts->ZPass_A = fake_sample_count;
       pSampleCounts->Total_A = fake_sample_count;
     }
@@ -1171,9 +1182,11 @@ bool CommandProcessor::ExecutePacketType3_DRAW_INDX(RingBuffer* reader,
   // initiate fetch of index buffer and draw
   // if dword0 != 0, this is a conditional draw based on viz query.
   // This ID matches the one issued in PM4_VIZ_QUERY
-  // ID = dword0 & 0x3F;
-  // use = dword0 & 0x40;
   uint32_t dword0 = reader->ReadAndSwap<uint32_t>();  // viz query info
+  // uint32_t viz_id = dword0 & 0x3F;
+  // when true, render conditionally based on query result
+  // uint32_t viz_use = dword0 & 0x100;
+
   reg::VGT_DRAW_INITIATOR vgt_draw_initiator;
   vgt_draw_initiator.value = reader->ReadAndSwap<uint32_t>();
   WriteRegister(XE_GPU_REG_VGT_DRAW_INITIATOR, vgt_draw_initiator.value);
@@ -1210,6 +1223,14 @@ bool CommandProcessor::ExecutePacketType3_DRAW_INDX(RingBuffer* reader,
     } break;
   }
 
+  auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();
+  if (viz_query.viz_query_ena && viz_query.kill_pix_post_hi_z) {
+    // TODO(Triang3l): Don't drop the draw call completely if the vertex shader
+    // has memexport.
+    // TODO(Triang3l || JoelLinn): Handle this properly in the render backends.
+    return true;
+  }
+
   bool success =
       IssueDraw(vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices,
                 is_indexed ? &index_buffer_info : nullptr,
@@ -1242,6 +1263,14 @@ bool CommandProcessor::ExecutePacketType3_DRAW_INDX_2(RingBuffer* reader,
   // uint32_t index_ptr = reader->ptr();
   // TODO(Triang3l): VGT_IMMED_DATA.
   reader->AdvanceRead((count - 1) * sizeof(uint32_t));
+
+  auto viz_query = register_file_->Get<reg::PA_SC_VIZ_QUERY>();
+  if (viz_query.viz_query_ena && viz_query.kill_pix_post_hi_z) {
+    // TODO(Triang3l): Don't drop the draw call completely if the vertex shader
+    // has memexport.
+    // TODO(Triang3l || JoelLinn): Handle this properly in the render backends.
+    return true;
+  }
 
   bool success = IssueDraw(
       vgt_draw_initiator.prim_type, vgt_draw_initiator.num_indices, nullptr,
@@ -1439,15 +1468,26 @@ bool CommandProcessor::ExecutePacketType3_VIZ_QUERY(RingBuffer* reader,
   uint32_t dword0 = reader->ReadAndSwap<uint32_t>();
 
   uint32_t id = dword0 & 0x3F;
-  uint32_t end = dword0 & 0x80;
+  uint32_t end = dword0 & 0x100;
   if (!end) {
     // begin a new viz query @ id
+    // On hardware this clears the internal state of the scan converter (which
+    // is different to the register)
     WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, VIZQUERY_START);
     XELOGGPU("Begin viz query ID {:02X}", id);
   } else {
     // end the viz query
     WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, VIZQUERY_END);
     XELOGGPU("End viz query ID {:02X}", id);
+    // The scan converter writes the internal result back to the register here.
+    // We just fake it and say it was visible in case it is read back.
+    if (id < 32) {
+      register_file_->values[XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_0].u32 |=
+          uint32_t(1) << id;
+    } else {
+      register_file_->values[XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_1].u32 |=
+          uint32_t(1) << (id - 32);
+    }
   }
 
   return true;

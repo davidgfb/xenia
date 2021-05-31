@@ -80,7 +80,7 @@ dword_result_t NtAllocateVirtualMemory(lpdword_t base_addr_ptr,
   // it's simple today we could extend it to do better things in the future.
 
   // Must request a size.
-  if (!base_addr_ptr || !region_size_ptr) {
+  if (!base_addr_ptr || !region_size_ptr || !*region_size_ptr) {
     return X_STATUS_INVALID_PARAMETER;
   }
   // Check allocation type.
@@ -101,6 +101,9 @@ dword_result_t NtAllocateVirtualMemory(lpdword_t base_addr_ptr,
   if (*base_addr_ptr != 0) {
     // ignore specified page size when base address is specified.
     auto heap = kernel_memory()->LookupHeap(*base_addr_ptr);
+    if (heap->heap_type() != HeapType::kGuestVirtual) {
+      return X_STATUS_INVALID_PARAMETER;
+    }
     page_size = heap->page_size();
   } else {
     // Adjust size.
@@ -132,12 +135,18 @@ dword_result_t NtAllocateVirtualMemory(lpdword_t base_addr_ptr,
   }
   uint32_t protect = FromXdkProtectFlags(protect_bits);
   uint32_t address = 0;
+  BaseHeap* heap;
+  HeapAllocationInfo prev_alloc_info = {};
+  bool was_commited = false;
+
   if (adjusted_base != 0) {
-    auto heap = kernel_memory()->LookupHeap(adjusted_base);
+    heap = kernel_memory()->LookupHeap(adjusted_base);
     if (heap->page_size() != page_size) {
       // Specified the wrong page size for the wrong heap.
       return X_STATUS_ACCESS_DENIED;
     }
+    was_commited = heap->QueryRegionInfo(adjusted_base, &prev_alloc_info) &&
+                   (prev_alloc_info.state & kMemoryAllocationCommit) != 0;
 
     if (heap->AllocFixed(adjusted_base, adjusted_size, page_size,
                          allocation_type, protect)) {
@@ -145,7 +154,7 @@ dword_result_t NtAllocateVirtualMemory(lpdword_t base_addr_ptr,
     }
   } else {
     bool top_down = !!(alloc_type & X_MEM_TOP_DOWN);
-    auto heap = kernel_memory()->LookupHeapByType(false, page_size);
+    heap = kernel_memory()->LookupHeapByType(false, page_size);
     heap->Alloc(adjusted_size, page_size, allocation_type, protect, top_down,
                 &address);
   }
@@ -157,7 +166,16 @@ dword_result_t NtAllocateVirtualMemory(lpdword_t base_addr_ptr,
   // Zero memory, if needed.
   if (address && !(alloc_type & X_MEM_NOZERO)) {
     if (alloc_type & X_MEM_COMMIT) {
-      kernel_memory()->Zero(address, adjusted_size);
+      if (!(protect & kMemoryProtectWrite)) {
+        heap->Protect(address, adjusted_size,
+                      kMemoryProtectRead | kMemoryProtectWrite);
+      }
+      if (!was_commited) {
+        kernel_memory()->Zero(address, adjusted_size);
+      }
+      if (!(protect & kMemoryProtectWrite)) {
+        heap->Protect(address, adjusted_size, protect);
+      }
     }
   }
 
@@ -180,7 +198,7 @@ dword_result_t NtProtectVirtualMemory(lpdword_t base_addr_ptr,
   assert_true(debug_memory == 0);
 
   // Must request a size.
-  if (!base_addr_ptr || !region_size_ptr) {
+  if (!base_addr_ptr || !region_size_ptr || !*region_size_ptr) {
     return X_STATUS_INVALID_PARAMETER;
   }
 
@@ -192,7 +210,9 @@ dword_result_t NtProtectVirtualMemory(lpdword_t base_addr_ptr,
   }
 
   auto heap = kernel_memory()->LookupHeap(*base_addr_ptr);
-
+  if (heap->heap_type() != HeapType::kGuestVirtual) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
   // Adjust the base downwards to the nearest page boundary.
   uint32_t adjusted_base =
       *base_addr_ptr - (*base_addr_ptr % heap->page_size());
@@ -240,6 +260,9 @@ dword_result_t NtFreeVirtualMemory(lpdword_t base_addr_ptr,
   }
 
   auto heap = kernel_state()->memory()->LookupHeap(base_addr_value);
+  if (heap->heap_type() != HeapType::kGuestVirtual) {
+    return X_STATUS_INVALID_PARAMETER;
+  }
   bool result = false;
   if (free_type == X_MEM_DECOMMIT) {
     // If zero, we may need to query size (free whole region).
@@ -392,7 +415,7 @@ dword_result_t MmQueryAddressProtect(dword_t base_address) {
   if (!heap->QueryProtect(base_address, &access)) {
     access = 0;
   }
-  access = ToXdkProtectFlags(access);
+  access = !access ? 0 : ToXdkProtectFlags(access);
 
   return access;
 }
@@ -401,6 +424,11 @@ DECLARE_XBOXKRNL_EXPORT2(MmQueryAddressProtect, kMemory, kImplemented,
 
 void MmSetAddressProtect(lpvoid_t base_address, dword_t region_size,
                          dword_t protect_bits) {
+  if (!protect_bits) {
+    XELOGE("MmSetAddressProtect: Failed due to incorrect protect_bits");
+    return;
+  }
+
   uint32_t protect = FromXdkProtectFlags(protect_bits);
   auto heap = kernel_memory()->LookupHeap(base_address);
   heap->Protect(base_address.guest_address(), region_size, protect);

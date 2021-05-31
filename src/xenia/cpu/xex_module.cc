@@ -299,6 +299,9 @@ int XexModule::ApplyPatch(XexModule* module) {
     module->xex_header_mem_.resize(header_target_size);
   }
 
+  // Update security info context with latest security info data
+  module->ReadSecurityInfo();
+
   uint32_t new_image_size = module->image_size();
 
   // Check if we need to alloc new memory for the patched xex
@@ -446,14 +449,9 @@ int XexModule::ApplyPatch(XexModule* module) {
       }
     }
 
-    // byteswap versions because of bitfields...
     xex2_version source_ver, target_ver;
-    source_ver.value =
-        xe::byte_swap<uint32_t>(patch_header->source_version.value);
-
-    target_ver.value =
-        xe::byte_swap<uint32_t>(patch_header->target_version.value);
-
+    source_ver = patch_header->source_version();
+    target_ver = patch_header->target_version();
     XELOGI(
         "XEX patch applied successfully: base version: {}.{}.{}.{}, new "
         "version: {}.{}.{}.{}",
@@ -867,25 +865,7 @@ int XexModule::ReadPEHeaders() {
   return 0;
 }
 
-bool XexModule::Load(const std::string_view name, const std::string_view path,
-                     const void* xex_addr, size_t xex_length) {
-  auto src_header = reinterpret_cast<const xex2_header*>(xex_addr);
-
-  if (src_header->magic == 'XEX1') {
-    xex_format_ = kFormatXex1;
-  } else if (src_header->magic == 'XEX2') {
-    xex_format_ = kFormatXex2;
-  } else {
-    return false;
-  }
-
-  assert_false(loaded_);
-  loaded_ = true;
-
-  // Read in XEX headers
-  xex_header_mem_.resize(src_header->header_size);
-  std::memcpy(xex_header_mem_.data(), src_header, src_header->header_size);
-
+void XexModule::ReadSecurityInfo() {
   if (xex_format_ == kFormatXex1) {
     const xex1_security_info* xex1_sec_info =
         reinterpret_cast<const xex1_security_info*>(
@@ -913,6 +893,29 @@ bool XexModule::Load(const std::string_view name, const std::string_view path,
     security_info_.page_descriptor_count = xex2_sec_info->page_descriptor_count;
     security_info_.page_descriptors = xex2_sec_info->page_descriptors;
   }
+}
+
+bool XexModule::Load(const std::string_view name, const std::string_view path,
+                     const void* xex_addr, size_t xex_length) {
+  auto src_header = reinterpret_cast<const xex2_header*>(xex_addr);
+
+  if (src_header->magic == 'XEX1') {
+    xex_format_ = kFormatXex1;
+  } else if (src_header->magic == 'XEX2') {
+    xex_format_ = kFormatXex2;
+  } else {
+    return false;
+  }
+
+  assert_false(loaded_);
+  loaded_ = true;
+
+  // Read in XEX headers
+  xex_header_mem_.resize(src_header->header_size);
+  std::memcpy(xex_header_mem_.data(), src_header, src_header->header_size);
+
+  // Read/convert XEX1/XEX2 security info to a common format
+  ReadSecurityInfo();
 
   auto sec_header = xex_security_info();
 
@@ -1104,8 +1107,8 @@ bool XexModule::SetupLibraryImports(const std::string_view name,
   ImportLibrary library_info;
   library_info.name = base_name;
   library_info.id = library->id;
-  library_info.version.value = library->version.value;
-  library_info.min_version.value = library->version_min.value;
+  library_info.version.value = library->version().value;
+  library_info.min_version.value = library->version_min().value;
 
   // Imports are stored as {import descriptor, thunk addr, import desc, ...}
   // Even thunks have an import descriptor (albeit unused/useless)

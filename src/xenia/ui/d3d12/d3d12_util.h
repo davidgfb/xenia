@@ -19,7 +19,7 @@ namespace ui {
 namespace d3d12 {
 namespace util {
 
-using DescriptorCPUGPUHandlePair =
+using DescriptorCpuGpuHandlePair =
     std::pair<D3D12_CPU_DESCRIPTOR_HANDLE, D3D12_GPU_DESCRIPTOR_HANDLE>;
 
 extern const D3D12_HEAP_PROPERTIES kHeapPropertiesDefault;
@@ -27,7 +27,7 @@ extern const D3D12_HEAP_PROPERTIES kHeapPropertiesUpload;
 extern const D3D12_HEAP_PROPERTIES kHeapPropertiesReadback;
 
 template <typename T>
-inline bool ReleaseAndNull(T& object) {
+bool ReleaseAndNull(T& object) {
   if (object != nullptr) {
     object->Release();
     object = nullptr;
@@ -39,9 +39,10 @@ inline bool ReleaseAndNull(T& object) {
 ID3D12RootSignature* CreateRootSignature(const D3D12Provider& provider,
                                          const D3D12_ROOT_SIGNATURE_DESC& desc);
 
-ID3D12PipelineState* CreateComputePipelineState(
-    ID3D12Device* device, const void* shader, size_t shader_size,
-    ID3D12RootSignature* root_signature);
+ID3D12PipelineState* CreateComputePipeline(ID3D12Device* device,
+                                           const void* shader,
+                                           size_t shader_size,
+                                           ID3D12RootSignature* root_signature);
 
 constexpr DXGI_FORMAT GetUintPow2DXGIFormat(uint32_t element_size_bytes_log2) {
   switch (element_size_bytes_log2) {
@@ -91,6 +92,14 @@ void CreateBufferTypedUAV(ID3D12Device* device,
                           D3D12_CPU_DESCRIPTOR_HANDLE handle,
                           ID3D12Resource* buffer, DXGI_FORMAT format,
                           uint32_t num_elements, uint64_t first_element = 0);
+
+// For cases where GetCopyableFootprints isn't usable (such as when the size
+// needs to be overaligned beyond the maximum texture size), providing data
+// needed to compute the copyable footprints manually.
+void GetFormatCopyInfo(DXGI_FORMAT format, uint32_t plane,
+                       DXGI_FORMAT& copy_format_out, uint32_t& block_width_out,
+                       uint32_t& block_height_out,
+                       uint32_t& bytes_per_block_out);
 
 }  // namespace util
 }  // namespace d3d12

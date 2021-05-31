@@ -125,20 +125,26 @@ void* X64Emitter::Emplace(const EmitFunctionInfo& func_info,
   // top_ points to the Xbyak buffer, and since we are in AutoGrow mode
   // it has pending relocations. We copy the top_ to our buffer, swap the
   // pointer, relocate, then return the original scratch pointer for use.
+  // top_ is used by Xbyak's ready() as both write base pointer and the absolute
+  // address base, which would not work on platforms not supporting writable
+  // executable memory, but Xenia doesn't use absolute label addresses in the
+  // generated code.
   uint8_t* old_address = top_;
-  void* new_address;
+  void* new_execute_address;
+  void* new_write_address;
   assert_true(func_info.code_size.total == size_);
   if (function) {
-    new_address = code_cache_->PlaceGuestCode(function->address(), top_,
-                                              func_info, function);
+    code_cache_->PlaceGuestCode(function->address(), top_, func_info, function,
+                                new_execute_address, new_write_address);
   } else {
-    new_address = code_cache_->PlaceHostCode(0, top_, func_info);
+    code_cache_->PlaceHostCode(0, top_, func_info, new_execute_address,
+                               new_write_address);
   }
-  top_ = reinterpret_cast<uint8_t*>(new_address);
+  top_ = reinterpret_cast<uint8_t*>(new_write_address);
   ready();
   top_ = old_address;
   reset();
-  return new_address;
+  return new_execute_address;
 }
 
 bool X64Emitter::Emit(HIRBuilder* builder, EmitFunctionInfo& func_info) {
@@ -740,6 +746,8 @@ static const vec128_t xmm_consts[] = {
     /* XMMIntMaxPD            */ vec128d(INT_MAX),
     /* XMMPosIntMinPS         */ vec128f((float)0x80000000u),
     /* XMMQNaN                */ vec128i(0x7FC00000u),
+    /* XMMInt127              */ vec128i(0x7Fu),
+    /* XMM2To32               */ vec128f(0x1.0p32f),
 };
 
 // First location to try and place constants.
@@ -793,7 +801,7 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, const vec128_t& v) {
   if (!v.low && !v.high) {
     // 0000...
     vpxor(dest, dest);
-  } else if (v.low == ~0ull && v.high == ~0ull) {
+  } else if (v.low == ~uint64_t(0) && v.high == ~uint64_t(0)) {
     // 1111...
     vpcmpeqb(dest, dest);
   } else {
@@ -810,10 +818,10 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, float v) {
     float f;
     uint32_t i;
   } x = {v};
-  if (!v) {
-    // 0
+  if (!x.i) {
+    // +0.0f (but not -0.0f because it may be used to flip the sign via xor).
     vpxor(dest, dest);
-  } else if (x.i == ~0U) {
+  } else if (x.i == ~uint32_t(0)) {
     // 1111...
     vpcmpeqb(dest, dest);
   } else {
@@ -829,10 +837,10 @@ void X64Emitter::LoadConstantXmm(Xbyak::Xmm dest, double v) {
     double d;
     uint64_t i;
   } x = {v};
-  if (!v) {
-    // 0
+  if (!x.i) {
+    // +0.0 (but not -0.0 because it may be used to flip the sign via xor).
     vpxor(dest, dest);
-  } else if (x.i == ~0ULL) {
+  } else if (x.i == ~uint64_t(0)) {
     // 1111...
     vpcmpeqb(dest, dest);
   } else {

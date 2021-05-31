@@ -2,7 +2,7 @@
  ******************************************************************************
  * Xenia : Xbox 360 Emulator Research Project                                 *
  ******************************************************************************
- * Copyright 2020 Ben Vanik. All rights reserved.                             *
+ * Copyright 2021 Ben Vanik. All rights reserved.                             *
  * Released under the BSD license - see LICENSE in the root for more details. *
  ******************************************************************************
  */
@@ -59,14 +59,17 @@ namespace xe {
 
 Emulator::Emulator(const std::filesystem::path& command_line,
                    const std::filesystem::path& storage_root,
-                   const std::filesystem::path& content_root)
+                   const std::filesystem::path& content_root,
+                   const std::filesystem::path& cache_root)
     : on_launch(),
       on_terminate(),
       on_exit(),
       command_line_(command_line),
       storage_root_(storage_root),
       content_root_(content_root),
-      game_title_(),
+      cache_root_(cache_root),
+      title_name_(),
+      title_version_(),
       display_window_(nullptr),
       memory_(),
       audio_system_(),
@@ -76,7 +79,7 @@ Emulator::Emulator(const std::filesystem::path& command_line,
       file_system_(),
       kernel_state_(),
       main_thread_(),
-      title_id_(0),
+      title_id_(std::nullopt),
       paused_(false),
       restoring_(false),
       restore_fence_() {}
@@ -184,7 +187,10 @@ X_STATUS Emulator::Setup(
   if (input_driver_factory) {
     auto input_drivers = input_driver_factory(display_window_);
     for (size_t i = 0; i < input_drivers.size(); ++i) {
-      input_system_->AddDriver(std::move(input_drivers[i]));
+      auto& input_driver = input_drivers[i];
+      input_driver->set_is_active_callback(
+          []() -> bool { return !xe::kernel::xam::xeXamIsUIActive(); });
+      input_system_->AddDriver(std::move(input_driver));
     }
   }
 
@@ -241,8 +247,9 @@ X_STATUS Emulator::TerminateTitle() {
   }
 
   kernel_state_->TerminateTitle();
-  title_id_ = 0;
-  game_title_ = "";
+  title_id_ = std::nullopt;
+  title_name_ = "";
+  title_version_ = "";
   on_terminate();
   return X_STATUS_SUCCESS;
 }
@@ -358,7 +365,7 @@ void Emulator::Pause() {
   auto lock = global_critical_region::AcquireDirect();
   auto threads =
       kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
-          kernel::XObject::kTypeThread);
+          kernel::XObject::Type::Thread);
   auto current_thread = kernel::XThread::IsInThread()
                             ? kernel::XThread::GetCurrentThread()
                             : nullptr;
@@ -388,7 +395,7 @@ void Emulator::Resume() {
 
   auto threads =
       kernel_state()->object_table()->GetObjectsByType<kernel::XThread>(
-          kernel::XObject::kTypeThread);
+          kernel::XObject::Type::Thread);
   for (auto thread : threads) {
     if (!thread->can_debugger_suspend()) {
       // Don't pause host threads.
@@ -414,7 +421,10 @@ bool Emulator::SaveToFile(const std::filesystem::path& path) {
   // Save the emulator state to a file
   ByteStream stream(map->data(), map->size());
   stream.Write('XSAV');
-  stream.Write(title_id_);
+  stream.Write(title_id_.has_value());
+  if (title_id_.has_value()) {
+    stream.Write(title_id_.value());
+  }
 
   // It's important we don't hold the global lock here! XThreads need to step
   // forward (possibly through guarded regions) without worry!
@@ -448,8 +458,15 @@ bool Emulator::RestoreFromFile(const std::filesystem::path& path) {
     return false;
   }
 
-  auto title_id = stream.Read<uint32_t>();
-  if (title_id != title_id_) {
+  auto has_title_id = stream.Read<bool>();
+  std::optional<uint32_t> title_id;
+  if (!has_title_id) {
+    title_id = {};
+  } else {
+    title_id = stream.Read<uint32_t>();
+  }
+  if (title_id_.has_value() != title_id.has_value() ||
+      title_id_.value() != title_id.value()) {
     // Swapping between titles is unsupported at the moment.
     assert_always();
     return false;
@@ -513,7 +530,7 @@ bool Emulator::ExceptionCallbackThunk(Exception* ex, void* data) {
 bool Emulator::ExceptionCallback(Exception* ex) {
   // Check to see if the exception occurred in guest code.
   auto code_cache = processor()->backend()->code_cache();
-  auto code_base = code_cache->base_address();
+  auto code_base = code_cache->execute_base_address();
   auto code_end = code_base + code_cache->total_size();
 
   if (!processor()->is_debugger_attached() && debugging::IsDebuggerAttached()) {
@@ -637,11 +654,28 @@ std::string Emulator::FindLaunchModule() {
   return path + default_module;
 }
 
+static std::string format_version(xex2_version version) {
+  // fmt::format doesn't like bit fields
+  uint32_t major, minor, build, qfe;
+  major = version.major;
+  minor = version.minor;
+  build = version.build;
+  qfe = version.qfe;
+  if (qfe) {
+    return fmt::format("{}.{}.{}.{}", major, minor, build, qfe);
+  }
+  if (build) {
+    return fmt::format("{}.{}.{}", major, minor, build);
+  }
+  return fmt::format("{}.{}", major, minor);
+}
+
 X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
                                   const std::string_view module_path) {
   // Reset state.
-  title_id_ = 0;
-  game_title_ = "";
+  title_id_ = std::nullopt;
+  title_name_ = "";
+  title_version_ = "";
   display_window_->SetIcon(nullptr, 0);
 
   // Allow xam to request module loads.
@@ -657,8 +691,15 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // Grab the current title ID.
   xex2_opt_execution_info* info = nullptr;
   module->GetOptHeader(XEX_HEADER_EXECUTION_INFO, &info);
-  if (info) {
+
+  if (!info) {
+    title_id_ = 0;
+  } else {
     title_id_ = info->title_id;
+    auto title_version = info->version();
+    if (title_version.value != 0) {
+      title_version_ = format_version(title_version);
+    }
   }
 
   // Try and load the resource database (xex only).
@@ -672,7 +713,12 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
       kernel::util::XdbfGameData db(
           module->memory()->TranslateVirtual(resource_data), resource_size);
       if (db.is_valid()) {
-        game_title_ = db.title();
+        // TODO(gibbed): get title respective to user locale.
+        title_name_ = db.title(XLanguage::kEnglish);
+        if (title_name_.empty()) {
+          // If English title is unavailable, get the title in default locale.
+          title_name_ = db.title();
+        }
         auto icon_block = db.icon();
         if (icon_block) {
           display_window_->SetIcon(icon_block.buffer, icon_block.size);
@@ -686,7 +732,8 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
   // playing before the video can be seen if doing this in parallel with the
   // main thread.
   on_shader_storage_initialization(true);
-  graphics_system_->InitializeShaderStorage(storage_root_, title_id_, true);
+  graphics_system_->InitializeShaderStorage(cache_root_, title_id_.value(),
+                                            true);
   on_shader_storage_initialization(false);
 
   auto main_thread = kernel_state_->LaunchModule(module);
@@ -694,7 +741,7 @@ X_STATUS Emulator::CompleteLaunch(const std::filesystem::path& path,
     return X_STATUS_UNSUCCESSFUL;
   }
   main_thread_ = main_thread;
-  on_launch(title_id_, game_title_);
+  on_launch(title_id_.value(), title_name_);
 
   return X_STATUS_SUCCESS;
 }

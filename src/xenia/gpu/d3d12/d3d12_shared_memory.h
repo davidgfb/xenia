@@ -43,12 +43,13 @@ class D3D12SharedMemory : public SharedMemory {
   }
 
   void CompletedSubmissionUpdated();
+  void BeginSubmission();
 
   // RequestRange may transition the buffer to copy destination - call it before
   // UseForReading or UseForWriting.
 
   // Makes the buffer usable for vertices, indices and texture untiling.
-  inline void UseForReading() {
+  void UseForReading() {
     // Vertex fetch is also allowed in pixel shaders.
     CommitUAVWritesAndTransitionBuffer(
         D3D12_RESOURCE_STATE_INDEX_BUFFER |
@@ -56,18 +57,18 @@ class D3D12SharedMemory : public SharedMemory {
         D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
   }
   // Makes the buffer usable for texture tiling after a resolve.
-  inline void UseForWriting() {
+  void UseForWriting() {
     CommitUAVWritesAndTransitionBuffer(D3D12_RESOURCE_STATE_UNORDERED_ACCESS);
   }
   // Makes the buffer usable as a source for copy commands.
-  inline void UseAsCopySource() {
+  void UseAsCopySource() {
     CommitUAVWritesAndTransitionBuffer(D3D12_RESOURCE_STATE_COPY_SOURCE);
   }
   // Must be called when doing draws/dispatches modifying data within the shared
   // memory buffer as a UAV, to make sure that when UseForWriting is called the
   // next time, a UAV barrier will be done, and subsequent overlapping UAV
   // writes and reads are ordered.
-  inline void MarkUAVWritesCommitNeeded() {
+  void MarkUAVWritesCommitNeeded() {
     if (buffer_state_ == D3D12_RESOURCE_STATE_UNORDERED_ACCESS) {
       buffer_uav_writes_commit_needed_ = true;
     }

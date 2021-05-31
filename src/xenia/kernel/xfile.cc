@@ -22,11 +22,13 @@ namespace xe {
 namespace kernel {
 
 XFile::XFile(KernelState* kernel_state, vfs::File* file, bool synchronous)
-    : XObject(kernel_state, kType), file_(file), is_synchronous_(synchronous) {
+    : XObject(kernel_state, kObjectType),
+      file_(file),
+      is_synchronous_(synchronous) {
   async_event_ = threading::Event::CreateAutoResetEvent(false);
 }
 
-XFile::XFile() : XObject(kType) {
+XFile::XFile() : XObject(kObjectType) {
   async_event_ = threading::Event::CreateAutoResetEvent(false);
 }
 
@@ -91,7 +93,7 @@ X_STATUS XFile::QueryDirectory(X_FILE_DIRECTORY_INFORMATION* out_info,
 
 X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
                      uint64_t byte_offset, uint32_t* out_bytes_read,
-                     uint32_t apc_context) {
+                     uint32_t apc_context, bool notify_completion) {
   if (byte_offset == uint64_t(-1)) {
     // Read from current position.
     byte_offset = position_;
@@ -122,14 +124,14 @@ X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
       const xe::BaseHeap* buffer_end_heap =
           memory()->LookupHeap(buffer_guest_high_address);
       if (!buffer_start_heap || !buffer_end_heap ||
-          buffer_start_heap->IsGuestPhysicalHeap() !=
-              buffer_end_heap->IsGuestPhysicalHeap() ||
-          (buffer_start_heap->IsGuestPhysicalHeap() &&
+          (buffer_start_heap->heap_type() == HeapType::kGuestPhysical) !=
+              (buffer_end_heap->heap_type() == HeapType::kGuestPhysical) ||
+          (buffer_start_heap->heap_type() == HeapType::kGuestPhysical &&
            buffer_start_heap != buffer_end_heap)) {
         result = X_STATUS_ACCESS_VIOLATION;
       } else {
         xe::PhysicalHeap* buffer_physical_heap =
-            buffer_start_heap->IsGuestPhysicalHeap()
+            buffer_start_heap->heap_type() == HeapType::kGuestPhysical
                 ? static_cast<xe::PhysicalHeap*>(buffer_start_heap)
                 : nullptr;
         if (buffer_physical_heap &&
@@ -158,18 +160,77 @@ X_STATUS XFile::Read(uint32_t buffer_guest_address, uint32_t buffer_length,
     }
   }
 
-  XIOCompletion::IONotification notify;
-  notify.apc_context = apc_context;
-  notify.num_bytes = uint32_t(bytes_read);
-  notify.status = result;
-
-  NotifyIOCompletionPorts(notify);
-
   if (out_bytes_read) {
     *out_bytes_read = uint32_t(bytes_read);
   }
 
+  if (notify_completion) {
+    XIOCompletion::IONotification notify;
+    notify.apc_context = apc_context;
+    notify.num_bytes = uint32_t(bytes_read);
+    notify.status = result;
+
+    NotifyIOCompletionPorts(notify);
+
+    async_event_->Set();
+  }
+
+  return result;
+}
+
+X_STATUS XFile::ReadScatter(uint32_t segments_guest_address, uint32_t length,
+                            uint64_t byte_offset, uint32_t* out_bytes_read,
+                            uint32_t apc_context) {
+  X_STATUS result = X_STATUS_SUCCESS;
+
+  // segments points to an array of buffer pointers of type
+  // "FILE_SEGMENT_ELEMENT", but they can just be treated as normal pointers
+  xe::be<uint32_t>* segments = reinterpret_cast<xe::be<uint32_t>*>(
+      memory()->TranslateVirtual(segments_guest_address));
+
+  // TODO: not sure if this is meant to change depending on buffer address?
+  // (only game seen using this always seems to use 4096-byte buffers)
+  uint32_t page_size = 4096;
+
+  uint32_t read_total = 0;
+  uint32_t read_remain = length;
+  while (read_remain) {
+    uint32_t read_length = read_remain;
+    uint32_t read_buffer = *segments;
+    if (read_length > page_size) {
+      read_length = page_size;
+      segments++;
+    }
+
+    uint32_t bytes_read = 0;
+    result = Read(read_buffer, read_length,
+                  byte_offset ? ((byte_offset != -1 && byte_offset != -2)
+                                     ? byte_offset + read_total
+                                     : byte_offset)
+                              : -1,
+                  &bytes_read, apc_context, false);
+
+    if (result != X_STATUS_SUCCESS) {
+      break;
+    }
+
+    read_total += bytes_read;
+    read_remain -= read_length;
+  }
+
+  if (out_bytes_read) {
+    *out_bytes_read = uint32_t(read_total);
+  }
+
+  XIOCompletion::IONotification notify;
+  notify.apc_context = apc_context;
+  notify.num_bytes = uint32_t(read_total);
+  notify.status = result;
+
+  NotifyIOCompletionPorts(notify);
+
   async_event_->Set();
+
   return result;
 }
 
@@ -264,7 +325,7 @@ object_ref<XFile> XFile::Restore(KernelState* kernel_state,
   vfs::FileAction action;
   auto res = kernel_state->file_system()->OpenFile(
       nullptr, abs_path, vfs::FileDisposition::kOpen, access, is_directory,
-      &vfs_file, &action);
+      false, &vfs_file, &action);
   if (XFAILED(res)) {
     XELOGE("Failed to open XFile: error {:08X}", res);
     return object_ref<XFile>(file);

@@ -99,11 +99,12 @@ void GTKWindow::OnClose() {
   super::OnClose();
 }
 
-bool GTKWindow::set_title(const std::string& title) {
+bool GTKWindow::set_title(const std::string_view title) {
   if (!super::set_title(title)) {
     return false;
   }
-  gtk_window_set_title(GTK_WINDOW(window_), (gchar*)title.c_str());
+  std::string titlez(title);
+  gtk_window_set_title(GTK_WINDOW(window_), (gchar*)titlez.c_str());
   return true;
 }
 
@@ -415,14 +416,20 @@ GTKMenuItem::~GTKMenuItem() {
 
 void GTKMenuItem::OnChildAdded(MenuItem* generic_child_item) {
   auto child_item = static_cast<GTKMenuItem*>(generic_child_item);
+  GtkWidget* submenu = nullptr;
   switch (child_item->type()) {
     case MenuItem::Type::kNormal:
       // Nothing special.
       break;
     case MenuItem::Type::kPopup:
       if (GTK_IS_MENU_ITEM(menu_)) {
-        assert(gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_)) == nullptr);
-        gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_), child_item->handle());
+        submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_));
+        // Get sub menu and if it doesn't exist create it
+        if (submenu == nullptr) {
+          submenu = gtk_menu_new();
+          gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_), submenu);
+        }
+        gtk_menu_shell_append(GTK_MENU_SHELL(submenu), child_item->handle());
       } else {
         gtk_menu_shell_append(GTK_MENU_SHELL(menu_), child_item->handle());
       }
@@ -431,7 +438,7 @@ void GTKMenuItem::OnChildAdded(MenuItem* generic_child_item) {
     case MenuItem::Type::kString:
       assert(GTK_IS_MENU_ITEM(menu_));
       // Get sub menu and if it doesn't exist create it
-      GtkWidget* submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_));
+      submenu = gtk_menu_item_get_submenu(GTK_MENU_ITEM(menu_));
       if (submenu == nullptr) {
         submenu = gtk_menu_new();
         gtk_menu_item_set_submenu(GTK_MENU_ITEM(menu_), submenu);
